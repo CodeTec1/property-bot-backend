@@ -179,7 +179,7 @@ app.post('/api/search-properties', async (req, res) => {
       address: record.get('Address'),
       plotSize: record.get('Plot Size'),
       type: record.get('Type'),
-      photoUrl: photoUrl
+      photoUrl: record.get('Photo URL') || ''
     }));
     
     res.json({
