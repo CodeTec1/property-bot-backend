@@ -170,114 +170,91 @@ app.post('/api/sizes', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 4: Search Properties (FIXED + DEBUG)
+// ENDPOINT 4: Search Properties
 // ============================================
-
 app.post('/api/search-properties', async (req, res) => {
   try {
     const { tenantId, interest, location, bedrooms, plotSize, budget } = req.body;
-
-    // ---------------- DEBUG INPUT ----------------
-    console.log("====== SEARCH REQUEST RECEIVED ======");
-    console.log("REQ BODY:", req.body);
-    console.log("tenantId:", tenantId);
-    console.log("interest:", interest);
-    console.log("location:", location);
-    console.log("bedrooms:", bedrooms);
-    console.log("plotSize:", plotSize);
-    console.log("budget:", budget);
-    console.log("====================================");
-
+    
     if (!tenantId || !interest || !location) {
-      return res.status(400).json({
-        success: false,
-        error: 'tenantId, interest, and location are required'
+      return res.status(400).json({ 
+        success: false, 
+        error: 'tenantId, interest, and location are required' 
       });
     }
-
-    let conditions = [
-      `{TenantID} = '${tenantId}'`,
-      `{Type} = '${interest}'`,
-      `{Location} = '${location}'`,
-      `{Available} = 1`
-    ];
-
-    // ---------- LAND ----------
-    if (interest === 'Land' && plotSize && !plotSize.toLowerCase().includes('bedroom')) {
-
-      conditions.push(
-        `FIND(LOWER('${plotSize}'), LOWER({Plot Size}&""))`
-      );
-    }
-
-    // ---------- HOUSES ----------
-    if (interest !== 'Land' && bedrooms && !bedrooms.toLowerCase().includes('/')) {
-
+    
+    // Build filter - EXACTLY matching the working Airtable formula
+    let filter;
+    
+    if (interest === 'Land') {
+      // Land search with LOWER() for fuzzy matching
+      filter = `AND(
+        {Type} = "Land",
+        {Location} = "${location}",
+        FIND(LOWER("${plotSize}"), LOWER({Plot Size})),
+        {Available} = TRUE(),
+        {TenantID} = "${tenantId}"
+      )`;
+    } else {
+      // House/Apartment search
       let bedroomNumber = bedrooms;
-
       if (typeof bedrooms === 'string') {
         const match = bedrooms.match(/\d+/);
-        bedroomNumber = match ? parseInt(match[0]) : null;
+        bedroomNumber = match ? parseInt(match[0]) : bedrooms;
       }
-
-      if (bedroomNumber) {
-        conditions.push(`{Bedrooms} = ${parseInt(bedroomNumber)}`);
-      }
+      
+      filter = `AND(
+        {Type} = "${interest}",
+        {Bedrooms} = ${parseInt(bedroomNumber)},
+        {Location} = "${location}",
+        {Available} = TRUE(),
+        {TenantID} = "${tenantId}"
+      )`;
     }
-
-    // ---------- BUDGET ----------
-    if (budget && !isNaN(budget)) {
-      conditions.push(`{Price} <= ${budget}`);
+    
+    // Add budget filter if provided
+    if (budget) {
+      // Wrap existing filter in another AND with budget
+      filter = `AND(${filter}, {Price} <= ${budget})`;
     }
-
-    const filter = `AND(${conditions.join(',')})`;
-
-    // ---------------- DEBUG FILTER ----------------
-    console.log("FINAL FILTER:", filter);
-
+    
+    console.log('Search filter:', filter); // DEBUG LOG
+    
     const records = await base('Properties')
       .select({
         filterByFormula: filter,
-        maxRecords: 10,
-        fields: [
-          'Property Name',
-          'Price',
-          'Bedrooms',
-          'Location',
-          'Address',
-          'Plot Size',
-          'Type',
-          'Photo URL'
-        ]
+        maxRecords: 3,
+        sort: [{ field: 'Price', direction: 'asc' }],
+        fields: ['Property Name', 'Price', 'Bedrooms', 'Location', 'Address', 'Plot Size', 'Type', 'Photo URL']
       })
       .all();
-
-    console.log("RECORDS FOUND:", records.length);
-
-    const properties = records
-      .map((record, index) => ({
-        number: index + 1,
-        id: record.id,
-        name: record.get('Property Name'),
-        price: record.get('Price'),
-        bedrooms: record.get('Bedrooms'),
-        location: record.get('Location'),
-        address: record.get('Address'),
-        plotSize: record.get('Plot Size'),
-        type: record.get('Type'),
-        photoUrl: record.get('Photo URL') || ''
-      }))
-      .sort((a, b) => (a.price || 0) - (b.price || 0))
-      .slice(0, 3);
-
-    console.log("RETURNING:", properties.length);
-
+    
+    // Sort again to be absolutely sure (Airtable sometimes doesn't respect sort)
+    const sortedRecords = records.sort((a, b) => {
+      const priceA = a.get('Price') || 0;
+      const priceB = b.get('Price') || 0;
+      return priceA - priceB;
+    });
+    
+    const properties = sortedRecords.map((record, index) => ({
+      number: index + 1,
+      id: record.id,
+      name: record.get('Property Name'),
+      price: record.get('Price'),
+      bedrooms: record.get('Bedrooms'),
+      location: record.get('Location'),
+      address: record.get('Address'),
+      plotSize: record.get('Plot Size'),
+      type: record.get('Type'),
+      photoUrl: record.get('Photo URL') || ''
+    }));
+    
     res.json({
       success: true,
-      properties,
+      properties: properties,
       count: properties.length
     });
-
+    
   } catch (error) {
     console.error('Error in search-properties:', error);
     res.status(500).json({ success: false, error: error.message });
