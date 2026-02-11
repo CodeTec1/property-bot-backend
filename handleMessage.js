@@ -1,9 +1,10 @@
-// handleMessage.js
+// handleMessage.js - Enhanced conversation logic with natural language support
 
 async function handleMessage(input) {
   try {
     // 1. Get input data
-    const message = (input.message || "").toLowerCase().trim();
+    const originalMessage = input.message || "";
+    const message = originalMessage.toLowerCase().trim();
     const phone = input.from;
 
     // 2. Identify lead and stage
@@ -36,6 +37,7 @@ async function handleMessage(input) {
       plotSize: ""
     };
 
+    // Tenant configuration
     const botName = input.tenant_bot_name || "PropertyBot";
     const companyName = input.tenant_company_name || "our company";
     const tenantTypes = input.tenant_property_types || "Buy, Rent";
@@ -43,7 +45,7 @@ async function handleMessage(input) {
     function formatOptions(types) {
       return types
         .split(',')
-        .map(t => `• ${t.trim()}`)
+        .map((t, index) => `${index + 1}️⃣ ${t.trim()}`)
         .join('\n');
     }
 
@@ -71,7 +73,7 @@ What are you looking for?
 
 ${options}
 
-Reply with your choice.`;
+Reply with the name or number (e.g., Buy or 1).`;
 
       return response;
     }
@@ -79,7 +81,7 @@ Reply with your choice.`;
     // ======================================
     // GREETING
     // ======================================
-    if (message.match(/^(hi|hello|hey|start|helo)$/)) {
+    if (message.match(/^(hi|hello|hey|start|helo|restart)$/)) {
       response.action = "update";
       response.updateFields = {
         "Conversation Stage": "asked_buy_or_rent"
@@ -96,7 +98,7 @@ What are you looking for?
 
 ${options}
 
-Reply with your choice.`;
+Reply with the name or number (e.g., Rent or 2).`;
 
       return response;
     }
@@ -105,32 +107,77 @@ Reply with your choice.`;
     // STAGE 1: PROPERTY TYPE
     // ======================================
     if (stage === "asked_buy_or_rent") {
-      const types = tenantTypes.split(',').map(t => t.trim().toLowerCase());
+      const typesList = tenantTypes.split(',').map(t => t.trim());
+      
+      // Build mapping: number → type and name → type
+      const typeMapping = {};
+      typesList.forEach((type, index) => {
+        typeMapping[(index + 1).toString()] = type;
+        typeMapping[type.toLowerCase()] = type;
+      });
 
-      if (!types.includes(message)) {
+      const selectedType = typeMapping[message];
+
+      if (!selectedType) {
+        const options = formatOptions(tenantTypes);
         response.action = "invalid";
-        response.replyMessage = "Please choose one of the listed options.";
+        response.replyMessage = `Please choose from the options below:
+
+${options}
+
+Reply with the name or number.`;
         return response;
       }
 
-      const interest = message.charAt(0).toUpperCase() + message.slice(1);
-
       response.action = "update";
       response.updateFields = {
-        "Interest": interest,
+        "Interest": selectedType,
         "Conversation Stage": "asked_name"
       };
 
-      response.replyMessage = "Great choice! 👍\n\nWhat's your name?";
+      response.replyMessage = `Great choice! 👍
+
+What's your name?
+
+(Just type your name, e.g., Peter or Mary Jane)`;
       return response;
     }
 
     // ======================================
-    // STAGE 2: NAME
+    // STAGE 2: NAME (Enhanced - accepts natural language)
     // ======================================
-    if (stage === "asked_name" && message.match(/^[a-zA-Z]{2,}(\s[a-zA-Z]{2,})?$/)) {
-      const name = message.split(' ')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    if (stage === "asked_name") {
+      let name = "";
+
+      // Try to extract name from various formats
+      if (message.match(/my name is (.+)/i)) {
+        name = message.match(/my name is (.+)/i)[1];
+      } else if (message.match(/i am (.+)/i)) {
+        name = message.match(/i am (.+)/i)[1];
+      } else if (message.match(/i'm (.+)/i)) {
+        name = message.match(/i'm (.+)/i)[1];
+      } else if (message.match(/this is (.+)/i)) {
+        name = message.match(/this is (.+)/i)[1];
+      } else if (message.match(/^[a-zA-Z]{2,}(\s[a-zA-Z]{2,})*$/)) {
+        name = message; // Direct name input
+      }
+
+      // Validate extracted name
+      if (!name || name.length < 2) {
+        response.action = "invalid";
+        response.replyMessage = `I didn't quite catch that.
+
+Please enter your name (e.g., John or Mary Jane).
+
+Just your name is enough! 😊`;
+        return response;
+      }
+
+      // Clean and capitalize
+      name = name.trim()
+        .replace(/[^a-zA-Z\s]/g, '') // Remove special characters
+        .split(/\s+/)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join(' ');
 
       response.action = "update";
@@ -138,15 +185,56 @@ Reply with your choice.`;
         "Name": name,
         "Conversation Stage": "asked_budget"
       };
-      response.replyMessage = `Nice to meet you, ${name}! 👋\n\nWhat's your budget?\n\nExample: 5000000 or 5M`;
+      
+      response.replyMessage = `Nice to meet you, ${name}! 👋
+
+What's your budget?
+
+Examples:
+• 5000000
+• 5M (5 million)
+• 500K (500 thousand)
+
+Just type the amount!`;
       return response;
     }
 
     // ======================================
-    // STAGE 3: BUDGET (Triggers location fetch)
+    // STAGE 3: BUDGET (Enhanced - accepts natural language)
     // ======================================
-    if (stage === "asked_budget" && message.match(/^\s*[\d.,]+[mMkK]?\s*$/)) {
-      let budget = message.replace(/,/g, '').toUpperCase();
+    if (stage === "asked_budget") {
+      let budgetStr = message;
+
+      // Extract budget from various formats
+      if (message.match(/budget is (.+)/i)) {
+        budgetStr = message.match(/budget is (.+)/i)[1];
+      } else if (message.match(/i have (.+)/i)) {
+        budgetStr = message.match(/i have (.+)/i)[1];
+      } else if (message.match(/around (.+)/i)) {
+        budgetStr = message.match(/around (.+)/i)[1];
+      } else if (message.match(/about (.+)/i)) {
+        budgetStr = message.match(/about (.+)/i)[1];
+      }
+
+      // Clean: remove everything except numbers, dots, commas, M, K
+      budgetStr = budgetStr.replace(/[^0-9.,mkMK]/g, '').toUpperCase();
+
+      // Validate format
+      if (!budgetStr.match(/^[\d.,]+[MK]?$/)) {
+        response.action = "invalid";
+        response.replyMessage = `I didn't understand that budget.
+
+Please enter a valid amount:
+• 5000000
+• 5M (5 million)
+• 500K (500 thousand)
+
+Just the number is fine!`;
+        return response;
+      }
+
+      // Parse budget
+      let budget = budgetStr.replace(/,/g, '');
       if (budget.includes('M')) {
         budget = parseFloat(budget) * 1000000;
       } else if (budget.includes('K')) {
@@ -172,9 +260,30 @@ Reply with your choice.`;
     // ======================================
     // STAGE 4: LOCATION (Triggers size fetch)
     // ======================================
-    if (stage === "asked_location" && message.match(/^[a-zA-Z\s]{3,}$/)) {
-      const location = message.split(' ')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    if (stage === "asked_location") {
+      // Accept location in various formats
+      let location = message;
+
+      // Clean up common prefixes
+      if (message.match(/in (.+)/i)) {
+        location = message.match(/in (.+)/i)[1];
+      } else if (message.match(/at (.+)/i)) {
+        location = message.match(/at (.+)/i)[1];
+      }
+
+      // Validate it's mostly letters
+      if (!location.match(/[a-zA-Z]{2,}/)) {
+        response.action = "invalid";
+        response.replyMessage = `Please choose a location from the list above.
+
+Just type the area name (e.g., Westlands or Karen).`;
+        return response;
+      }
+
+      // Capitalize properly
+      location = location.trim()
+        .split(/\s+/)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join(' ');
 
       const interest = lead.Interest || input.lead_interest;
@@ -196,8 +305,30 @@ Reply with your choice.`;
     // ======================================
     // STAGE 5: SIZE (HOUSES)
     // ======================================
-    if (stage === "asked_size" && message.match(/^\s*\d+\s*$/)) {
-      const bedrooms = message.trim();
+    if (stage === "asked_size") {
+      // Extract number of bedrooms
+      let bedroomsStr = message;
+
+      // Handle various formats
+      if (message.match(/(\d+)\s*bed/i)) {
+        bedroomsStr = message.match(/(\d+)\s*bed/i)[1];
+      } else if (message.match(/i (want|need) (\d+)/i)) {
+        bedroomsStr = message.match(/i (want|need) (\d+)/i)[2];
+      } else if (message.match(/^\d+$/)) {
+        bedroomsStr = message;
+      }
+
+      const bedrooms = parseInt(bedroomsStr);
+
+      if (isNaN(bedrooms) || bedrooms < 1 || bedrooms > 20) {
+        response.action = "invalid";
+        response.replyMessage = `Please enter the number of bedrooms you need.
+
+Examples: 1, 2, 3, 4, etc.
+
+Just the number!`;
+        return response;
+      }
 
       const finalInterest = lead.Interest || input.lead_interest || "Not specified";
       const finalBudget = lead.Budget || input.lead_budget || "Not specified";
@@ -211,10 +342,10 @@ Reply with your choice.`;
       };
 
       response.interest = finalInterest;
-      response.bedrooms = parseInt(bedrooms);
-      response.requestedBedrooms = parseInt(bedrooms);
+      response.bedrooms = bedrooms;
+      response.requestedBedrooms = bedrooms;
       response.location = finalLocation;
-      response.searchProperties = true; // keeps your search HTTP in Make intact
+      response.searchProperties = true;
 
       response.replyMessage = `✅ Got it! Let me find the best matches for you...
 
@@ -233,7 +364,29 @@ Searching properties... 🔍`;
     // STAGE 5B: LAND SIZE SELECTION
     // ======================================
     if (stage === "asked_land_size") {
-      const plotSize = message.trim();
+      // Clean plot size input
+      let plotSize = originalMessage.trim(); // Keep original case for plot sizes like "1/4 Acre"
+
+      // Extract from various formats
+      if (message.match(/(\d+x\d+|\d+\/\d+|\d+\s*acre)/i)) {
+        // Already in good format
+      } else if (message.match(/i (want|need) (.+)/i)) {
+        plotSize = message.match(/i (want|need) (.+)/i)[2];
+      }
+
+      // Basic validation
+      if (plotSize.length < 2) {
+        response.action = "invalid";
+        response.replyMessage = `Please enter the plot size you're interested in.
+
+Examples:
+• 50x100
+• 1/4 Acre
+• 1/8
+
+Choose from the options above!`;
+        return response;
+      }
 
       const finalInterest = lead.Interest || input.lead_interest || "Land";
       const finalBudget = lead.Budget || input.lead_budget || "Not specified";
@@ -267,8 +420,25 @@ Searching properties... 🔍`;
     // ======================================
     // STAGE 7: BOOKING REQUEST
     // ======================================
-    if (stage === "completed" && message.match(/^property\s*\d+$/i)) {
-      const propertyNumber = parseInt(message.match(/\d+/)[0]);
+    if (stage === "completed") {
+      // Accept various property selection formats
+      let propertyNumber = null;
+
+      if (message.match(/property\s*(\d+)/i)) {
+        propertyNumber = parseInt(message.match(/property\s*(\d+)/i)[1]);
+      } else if (message.match(/^(\d+)$/)) {
+        propertyNumber = parseInt(message);
+      } else if (message.match(/number\s*(\d+)/i)) {
+        propertyNumber = parseInt(message.match(/number\s*(\d+)/i)[1]);
+      }
+
+      if (!propertyNumber) {
+        response.action = "invalid";
+        response.replyMessage = `Please reply with the property number you want to view.
+
+Example: Property1 or just 1`;
+        return response;
+      }
 
       response.action = "booking";
       response.updateFields = {
@@ -284,15 +454,32 @@ Searching properties... 🔍`;
     // ======================================
     // STAGE 8: TIME SLOT
     // ======================================
-    if (stage === "awaiting_time_slot" && message.match(/^\d+$/)) {
-      const timeSlotNumber = parseInt(message);
+    if (stage === "awaiting_time_slot") {
+      // Extract slot number
+      let slotNumber = null;
+
+      if (message.match(/slot\s*(\d+)/i)) {
+        slotNumber = parseInt(message.match(/slot\s*(\d+)/i)[1]);
+      } else if (message.match(/^(\d+)$/)) {
+        slotNumber = parseInt(message);
+      } else if (message.match(/number\s*(\d+)/i)) {
+        slotNumber = parseInt(message.match(/number\s*(\d+)/i)[1]);
+      }
+
+      if (!slotNumber) {
+        response.action = "invalid";
+        response.replyMessage = `Please reply with the slot number.
+
+Example: 3 or Slot 3`;
+        return response;
+      }
 
       response.action = "create_booking";
       response.updateFields = {
         "Conversation Stage": "booking_confirmed",
-        "Selected Time Slot": timeSlotNumber
+        "Selected Time Slot": slotNumber
       };
-      response.selectedTime = timeSlotNumber;
+      response.selectedTime = slotNumber;
       response.bookingRequest = true;
       response.replyMessage = "Creating your booking... ✅";
 
@@ -302,7 +489,7 @@ Searching properties... 🔍`;
     // ======================================
     // CANCEL
     // ======================================
-    if (message === "cancel" && stage === "booking_confirmed") {
+    if (stage === "booking_confirmed" && message.match(/cancel/i)) {
       response.action = "cancel_booking";
       response.updateFields = {
         "Conversation Stage": "booking_cancelled",
@@ -313,7 +500,7 @@ Searching properties... 🔍`;
     }
 
     // ======================================
-    // DEFAULT
+    // DEFAULT (Catch-all for unexpected input)
     // ======================================
     response.action = "invalid";
     response.replyMessage = getHelpMessage(stage);
@@ -321,14 +508,47 @@ Searching properties... 🔍`;
 
     function getHelpMessage(currentStage) {
       switch(currentStage) {
-        case "asked_buy_or_rent": return "Please reply with one of the listed options.";
-        case "asked_name": return "Please enter your name (letters only).";
-        case "asked_budget": return "Please enter a valid budget (e.g., 5000000 or 5M).";
-        case "asked_location": return "Please enter a location from the list above.";
-        case "asked_size": return "Please enter the number of bedrooms (e.g., 1, 2, 3).";
-        case "asked_land_size": return "Please enter the plot size you are interested in (e.g., 50x100, 1/8 Acre).";
-        case "awaiting_time_slot": return "Please reply with a slot number.";
-        default: return "Hi! Send 'hi' to start.";
+        case "asked_buy_or_rent": 
+          return `Please choose from the options:
+
+1️⃣ Buy
+2️⃣ Rent
+3️⃣ Land
+
+Reply with the name or number.`;
+        
+        case "asked_name": 
+          return `Please enter your name.
+
+Just your first name or full name (e.g., John or Mary Jane).`;
+        
+        case "asked_budget": 
+          return `Please enter your budget.
+
+Examples:
+• 5000000
+• 5M (5 million)
+• 500K (500 thousand)`;
+        
+        case "asked_location": 
+          return "Please choose a location from the list above.";
+        
+        case "asked_size": 
+          return "Please enter the number of bedrooms (e.g., 1, 2, 3).";
+        
+        case "asked_land_size": 
+          return `Please enter the plot size.
+
+Examples: 50x100, 1/4 Acre, 1/8`;
+        
+        case "awaiting_time_slot": 
+          return "Please reply with the slot number (e.g., 1, 2, 3).";
+        
+        case "booking_confirmed":
+          return "Your viewing is confirmed! Reply CANCEL to cancel, or HI to start over.";
+        
+        default: 
+          return "Hi! Send 'HI' to start finding your perfect property! 🏡";
       }
     }
 
@@ -336,7 +556,7 @@ Searching properties... 🔍`;
     console.error("Error in handleMessage:", error);
     return {
       action: "error",
-      replyMessage: "Oops! Something went wrong. Please try again later."
+      replyMessage: "Oops! Something went wrong. Please try again or send HI to restart."
     };
   }
 }
