@@ -317,10 +317,10 @@ app.post('/api/available-slots-v2', async (req, res) => {
       propertyId, 
       leadId, 
       calendarId,
-      workStart = 9, 
-      workEnd = 17, 
-      daysAhead = 7,
-      workingDays = "Monday, Tuesday, Wednesday, Thursday, Friday"
+      workStart,      // Airtable datetime string
+      workEnd,        // Airtable datetime string
+      daysAhead,      // number from tenant table
+      workingDays     // string like "Mon, Tue, Wed, Sat"
     } = req.body;
     
     console.log('========================================');
