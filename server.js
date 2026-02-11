@@ -194,20 +194,24 @@ app.post('/api/search-properties', async (req, res) => {
       });
     }
     
-    // Build filter - EXACTLY matching the working Airtable formula
+    // Build filter - Match on Type, Location, Size, Available ONLY (no budget!)
     let filter;
     
     console.log('Building filter for interest:', interest);
     
     if (interest === 'Land') {
       console.log('LAND SEARCH - Using plotSize:', plotSize);
-      // Land search with LOWER() for fuzzy matching
+      // Land search - flexible matching for plot size (strips spaces, case insensitive)
+      // Matches: "1/4" → "1/4 Acre", "50x100" → "50 x 100", etc.
+      const cleanPlotSize = plotSize.replace(/\s+/g, '').toLowerCase();
+      console.log('Cleaned plot size for search:', cleanPlotSize);
+      
       filter = `AND(
         {Type} = "Land",
         {Location} = "${location}",
-        FIND(LOWER("${plotSize}"), LOWER({Plot Size})),
+        FIND("${cleanPlotSize}", LOWER(SUBSTITUTE({Plot Size}, " ", ""))),
         {Available} = TRUE(),
-        {TenantID} = "${tenantId}"
+        SEARCH("${tenantId}", ARRAYJOIN({TenantID}))
       )`;
     } else {
       console.log('HOUSE SEARCH - Using bedrooms:', bedrooms);
@@ -225,16 +229,11 @@ app.post('/api/search-properties', async (req, res) => {
         {Bedrooms} = ${parseInt(bedroomNumber)},
         {Location} = "${location}",
         {Available} = TRUE(),
-        {TenantID} = "${tenantId}"
+        SEARCH("${tenantId}", ARRAYJOIN({TenantID}))
       )`;
     }
     
-    // Add budget filter if provided
-    if (budget) {
-      console.log('Adding budget filter:', budget);
-      // Wrap existing filter in another AND with budget
-      filter = `AND(${filter}, {Price} <= ${budget})`;
-    }
+    // NO BUDGET FILTER! Just return all matching properties sorted by price
     
     console.log('FINAL FILTER:');
     console.log(filter);
@@ -243,8 +242,8 @@ app.post('/api/search-properties', async (req, res) => {
     const records = await base('Properties')
       .select({
         filterByFormula: filter,
-        maxRecords: 3,
-        sort: [{ field: 'Price', direction: 'asc' }],
+        maxRecords: 10, // Return up to 10 properties (not limited by budget anymore)
+        sort: [{ field: 'Price', direction: 'asc' }], // Cheapest first!
         fields: ['Property Name', 'Price', 'Bedrooms', 'Location', 'Address', 'Plot Size', 'Type', 'Photo URL']
       })
       .all();
