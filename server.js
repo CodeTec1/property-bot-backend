@@ -309,7 +309,7 @@ app.post('/api/search-properties', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 5: Get Available Slots (Multi-Tenant)
+// ENDPOINT 5: Get Available Slots (Multi-Tenant) WITH DEBUG
 // ============================================
 app.post('/api/available-slots-v2', async (req, res) => {
   try {
@@ -323,11 +323,22 @@ app.post('/api/available-slots-v2', async (req, res) => {
       workingDays = "Monday, Tuesday, Wednesday, Thursday, Friday"
     } = req.body;
     
+    console.log('========================================');
+    console.log('SLOT CALCULATION REQUEST:');
+    console.log('Input data:', JSON.stringify(req.body, null, 2));
+    console.log('propertyId:', propertyId);
+    console.log('calendarId:', calendarId);
+    console.log('workStart:', workStart, 'workEnd:', workEnd);
+    console.log('daysAhead:', daysAhead);
+    console.log('workingDays:', workingDays);
+    
     // Validate
     if (!propertyId) {
+      console.log('ERROR: Property ID missing');
       return res.status(400).json({ success: false, error: 'Property ID is required' });
     }
     if (!calendarId) {
+      console.log('ERROR: Calendar ID missing');
       return res.status(400).json({ success: false, error: 'Calendar ID is required' });
     }
     
@@ -335,7 +346,9 @@ app.post('/api/available-slots-v2', async (req, res) => {
     let propertyRecord;
     try {
       propertyRecord = await base('Properties').find(propertyId);
+      console.log('Property found:', propertyRecord.get('Property Name'));
     } catch (err) {
+      console.log('ERROR: Property not found:', propertyId);
       return res.status(404).json({ success: false, error: `Property not found: ${propertyId}` });
     }
     
@@ -346,16 +359,42 @@ app.post('/api/available-slots-v2', async (req, res) => {
     const endDate = new Date(now);
     endDate.setDate(endDate.getDate() + daysAhead);
     
-    const calendarResponse = await calendar.events.list({
-      calendarId: calendarId,
-      timeMin: now.toISOString(),
-      timeMax: endDate.toISOString(),
-      q: propertyId,
-      singleEvents: true,
-      orderBy: 'startTime'
-    });
+    console.log('Current time (Kenya):', now.toLocaleString('en-KE'));
+    console.log('Searching calendar from:', now.toISOString());
+    console.log('Searching calendar to:', endDate.toISOString());
+    console.log('Calendar ID:', calendarId);
+    
+    let calendarResponse;
+    try {
+      calendarResponse = await calendar.events.list({
+        calendarId: calendarId,
+        timeMin: now.toISOString(),
+        timeMax: endDate.toISOString(),
+        q: propertyId,
+        singleEvents: true,
+        orderBy: 'startTime'
+      });
+      console.log('Calendar API response received');
+    } catch (calErr) {
+      console.error('Calendar API ERROR:', calErr.message);
+      console.error('Calendar ID used:', calendarId);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to access calendar: ' + calErr.message 
+      });
+    }
     
     const bookedEvents = calendarResponse.data.items || [];
+    console.log('Booked events found:', bookedEvents.length);
+    
+    if (bookedEvents.length > 0) {
+      console.log('Booked events:');
+      bookedEvents.forEach((e, i) => {
+        console.log(`  ${i+1}. ${e.summary} - ${e.start.dateTime || e.start.date}`);
+      });
+    } else {
+      console.log('Calendar is EMPTY - no bookings found');
+    }
     
     // Convert to simple format
     const booked = bookedEvents.map(event => ({
@@ -365,8 +404,14 @@ app.post('/api/available-slots-v2', async (req, res) => {
     
     // Calculate free slots
     const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000)); // 1 hour buffer
+    console.log('Minimum slot time (1hr buffer):', minSlotTime.toLocaleString('en-KE'));
+    
     const freeSlots = [];
     const MAX_SEARCH_DAYS = 30; // Keep searching for up to 30 days
+    
+    console.log('Starting slot generation...');
+    console.log('Work hours:', workStart, 'to', workEnd);
+    console.log('Working days:', workingDays);
     
     function overlaps(start, end) {
       return booked.some(b => start < b.end && end > b.start);
@@ -378,13 +423,29 @@ app.post('/api/available-slots-v2', async (req, res) => {
       return workingDaysStr.includes(dayName);
     }
     
+    let daysChecked = 0;
+    let slotsSkippedPast = 0;
+    let slotsSkippedWeekend = 0;
+    let slotsSkippedOverlap = 0;
+    
     // Generate slots - keep searching until we have 5 slots OR reach max days
     for (let i = 0; i < MAX_SEARCH_DAYS && freeSlots.length < 5; i++) {
       const day = new Date(now);
       day.setDate(day.getDate() + i);
       day.setHours(0, 0, 0, 0);
       
-      if (!isWorkingDay(day, workingDays)) continue;
+      daysChecked++;
+      
+      const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day.getDay()];
+      
+      if (!isWorkingDay(day, workingDays)) {
+        console.log(`Day ${i+1} (${dayName}): Skipped - not a working day`);
+        slotsSkippedWeekend++;
+        continue;
+      }
+      
+      console.log(`Day ${i+1} (${dayName} ${day.toLocaleDateString('en-KE')}): Checking slots...`);
+      let daySlotsFound = 0;
       
       for (let h = workStart; h < workEnd && freeSlots.length < 5; h++) {
         const slotStart = new Date(day);
@@ -393,8 +454,15 @@ app.post('/api/available-slots-v2', async (req, res) => {
         const slotEnd = new Date(slotStart);
         slotEnd.setMinutes(slotEnd.getMinutes() + 60);
         
-        if (slotStart <= minSlotTime) continue;
-        if (overlaps(slotStart, slotEnd)) continue;
+        if (slotStart <= minSlotTime) {
+          slotsSkippedPast++;
+          continue;
+        }
+        
+        if (overlaps(slotStart, slotEnd)) {
+          slotsSkippedOverlap++;
+          continue;
+        }
         
         freeSlots.push({
           number: freeSlots.length + 1,
@@ -411,8 +479,21 @@ app.post('/api/available-slots-v2', async (req, res) => {
             hour12: true 
           })
         });
+        
+        daySlotsFound++;
+      }
+      
+      if (daySlotsFound > 0) {
+        console.log(`  Found ${daySlotsFound} slots on this day`);
       }
     }
+    
+    console.log('Slot generation complete:');
+    console.log('  Days checked:', daysChecked);
+    console.log('  Slots skipped (past time):', slotsSkippedPast);
+    console.log('  Slots skipped (weekend/non-working):', slotsSkippedWeekend);
+    console.log('  Slots skipped (overlapping):', slotsSkippedOverlap);
+    console.log('  FREE SLOTS FOUND:', freeSlots.length);
     
     // Create slot map for storage
     const slotMap = {};
@@ -427,7 +508,16 @@ app.post('/api/available-slots-v2', async (req, res) => {
         `\n\nReply with slot number.`
       : `Sorry, no available slots found in the next ${MAX_SEARCH_DAYS} days.\n\nOur agent will contact you to arrange a viewing!\n\nReply HI to search for more properties.`;
     
-    console.log(`Slot search: Found ${freeSlots.length} slots for property ${propertyId}`); // DEBUG
+    if (freeSlots.length > 0) {
+      console.log('Slots to return:');
+      freeSlots.forEach(s => {
+        console.log(`  ${s.number}. ${s.displayDate}, ${s.displayTime}`);
+      });
+    } else {
+      console.log('NO SLOTS AVAILABLE - returning failure message');
+    }
+    
+    console.log('========================================');
     
     res.json({
       success: true,
@@ -439,7 +529,8 @@ app.post('/api/available-slots-v2', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error in available-slots-v2:', error);
+    console.error('ERROR in available-slots-v2:', error);
+    console.error('Stack:', error.stack);
     res.status(500).json({ success: false, error: error.message });
   }
 });
