@@ -170,13 +170,24 @@ app.post('/api/sizes', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 4: Search Properties
+// ENDPOINT 4: Search Properties (WITH DEBUG LOGGING)
 // ============================================
 app.post('/api/search-properties', async (req, res) => {
   try {
     const { tenantId, interest, location, bedrooms, plotSize, budget } = req.body;
     
+    console.log('========================================');
+    console.log('PROPERTY SEARCH REQUEST:');
+    console.log('Input data:', JSON.stringify(req.body, null, 2));
+    console.log('tenantId:', tenantId);
+    console.log('interest:', interest);
+    console.log('location:', location);
+    console.log('bedrooms:', bedrooms, typeof bedrooms);
+    console.log('plotSize:', plotSize, typeof plotSize);
+    console.log('budget:', budget);
+    
     if (!tenantId || !interest || !location) {
+      console.log('ERROR: Missing required fields');
       return res.status(400).json({ 
         success: false, 
         error: 'tenantId, interest, and location are required' 
@@ -186,7 +197,10 @@ app.post('/api/search-properties', async (req, res) => {
     // Build filter - EXACTLY matching the working Airtable formula
     let filter;
     
+    console.log('Building filter for interest:', interest);
+    
     if (interest === 'Land') {
+      console.log('LAND SEARCH - Using plotSize:', plotSize);
       // Land search with LOWER() for fuzzy matching
       filter = `AND(
         {Type} = "Land",
@@ -196,12 +210,15 @@ app.post('/api/search-properties', async (req, res) => {
         {TenantID} = "${tenantId}"
       )`;
     } else {
+      console.log('HOUSE SEARCH - Using bedrooms:', bedrooms);
       // House/Apartment search
       let bedroomNumber = bedrooms;
       if (typeof bedrooms === 'string') {
         const match = bedrooms.match(/\d+/);
         bedroomNumber = match ? parseInt(match[0]) : bedrooms;
       }
+      
+      console.log('Extracted bedroom number:', bedroomNumber);
       
       filter = `AND(
         {Type} = "${interest}",
@@ -214,11 +231,14 @@ app.post('/api/search-properties', async (req, res) => {
     
     // Add budget filter if provided
     if (budget) {
+      console.log('Adding budget filter:', budget);
       // Wrap existing filter in another AND with budget
       filter = `AND(${filter}, {Price} <= ${budget})`;
     }
     
-    console.log('Search filter:', filter); // DEBUG LOG
+    console.log('FINAL FILTER:');
+    console.log(filter);
+    console.log('========================================');
     
     const records = await base('Properties')
       .select({
@@ -229,11 +249,33 @@ app.post('/api/search-properties', async (req, res) => {
       })
       .all();
     
+    console.log('Airtable returned', records.length, 'records');
+    
+    if (records.length > 0) {
+      console.log('First record:', {
+        id: records[0].id,
+        name: records[0].get('Property Name'),
+        price: records[0].get('Price'),
+        type: records[0].get('Type'),
+        location: records[0].get('Location'),
+        bedrooms: records[0].get('Bedrooms'),
+        plotSize: records[0].get('Plot Size')
+      });
+    } else {
+      console.log('NO RECORDS FOUND!');
+      console.log('Filter used:', filter);
+    }
+    
     // Sort again to be absolutely sure (Airtable sometimes doesn't respect sort)
     const sortedRecords = records.sort((a, b) => {
       const priceA = a.get('Price') || 0;
       const priceB = b.get('Price') || 0;
       return priceA - priceB;
+    });
+    
+    console.log('After sorting, order is:');
+    sortedRecords.forEach((r, i) => {
+      console.log(`  ${i+1}. ${r.get('Property Name')} - ${r.get('Price')}`);
     });
     
     const properties = sortedRecords.map((record, index) => ({
@@ -249,6 +291,11 @@ app.post('/api/search-properties', async (req, res) => {
       photoUrl: record.get('Photo URL') || ''
     }));
     
+    console.log('RESPONSE:');
+    console.log('Returning', properties.length, 'properties');
+    console.log('Properties:', JSON.stringify(properties, null, 2));
+    console.log('========================================');
+    
     res.json({
       success: true,
       properties: properties,
@@ -256,7 +303,8 @@ app.post('/api/search-properties', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error in search-properties:', error);
+    console.error('ERROR in search-properties:', error);
+    console.error('Stack:', error.stack);
     res.status(500).json({ success: false, error: error.message });
   }
 });
