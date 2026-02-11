@@ -478,6 +478,7 @@ app.post('/api/available-slots-v2', async (req, res) => {
 // ============================================
 // ENDPOINT 6: Create Booking (Multi-Tenant)
 // ============================================
+console.log('CREATE BOOKING REQUEST BODY:', req.body);
 app.post('/api/create-booking', async (req, res) => {
   try {
     const { 
