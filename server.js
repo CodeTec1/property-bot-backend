@@ -186,13 +186,17 @@ app.post('/api/search-properties', async (req, res) => {
     // Build filter
     let filter = `AND({TenantID} = '${tenantId}', {Type} = '${interest}', {Location} = '${location}', {Available} = 1`;
     
-    if (interest === 'Land') {
-      // Fuzzy match for plot size
-      filter += `, FIND(LOWER('${plotSize}'), LOWER({Plot Size}))`;
-    } else {
+    if (interest === 'Land' && plotSize) {
+      // Fuzzy match for plot size - match "1/4" to "1/4 Acre" or "1/4"
+      filter += `, FIND('${plotSize}', {Plot Size})`;
+    } else if (interest !== 'Land' && bedrooms) {
       // Extract number from "3 bedroom" format
-      const bedroomNumber = bedrooms.toString().match(/\d+/)?.[0] || bedrooms;
-      filter += `, {Bedrooms} = ${bedroomNumber}`;
+      let bedroomNumber = bedrooms;
+      if (typeof bedrooms === 'string') {
+        const match = bedrooms.match(/\d+/);
+        bedroomNumber = match ? parseInt(match[0]) : bedrooms;
+      }
+      filter += `, {Bedrooms} = ${parseInt(bedroomNumber)}`;
     }
     
     if (budget) {
@@ -200,6 +204,8 @@ app.post('/api/search-properties', async (req, res) => {
     }
     
     filter += ')';
+    
+    console.log('Search filter:', filter); // DEBUG LOG
     
     const records = await base('Properties')
       .select({
@@ -210,7 +216,14 @@ app.post('/api/search-properties', async (req, res) => {
       })
       .all();
     
-    const properties = records.map((record, index) => ({
+    // Sort again to be absolutely sure (Airtable sometimes doesn't respect sort)
+    const sortedRecords = records.sort((a, b) => {
+      const priceA = a.get('Price') || 0;
+      const priceB = b.get('Price') || 0;
+      return priceA - priceB;
+    });
+    
+    const properties = sortedRecords.map((record, index) => ({
       number: index + 1,
       id: record.id,
       name: record.get('Property Name'),
@@ -293,6 +306,7 @@ app.post('/api/available-slots-v2', async (req, res) => {
     // Calculate free slots
     const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000)); // 1 hour buffer
     const freeSlots = [];
+    const MAX_SEARCH_DAYS = 30; // Keep searching for up to 30 days
     
     function overlaps(start, end) {
       return booked.some(b => start < b.end && end > b.start);
@@ -304,8 +318,8 @@ app.post('/api/available-slots-v2', async (req, res) => {
       return workingDaysStr.includes(dayName);
     }
     
-    // Generate slots
-    for (let i = 0; i < daysAhead && freeSlots.length < 5; i++) {
+    // Generate slots - keep searching until we have 5 slots OR reach max days
+    for (let i = 0; i < MAX_SEARCH_DAYS && freeSlots.length < 5; i++) {
       const day = new Date(now);
       day.setDate(day.getDate() + i);
       day.setHours(0, 0, 0, 0);
@@ -351,7 +365,9 @@ app.post('/api/available-slots-v2', async (req, res) => {
       ? `📅 Available viewings:\n\n` + 
         freeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
         `\n\nReply with slot number.`
-      : `No available slots in the next ${daysAhead} days. Please contact our agent.`;
+      : `Sorry, no available slots found in the next ${MAX_SEARCH_DAYS} days.\n\nOur agent will contact you to arrange a viewing!\n\nReply HI to search for more properties.`;
+    
+    console.log(`Slot search: Found ${freeSlots.length} slots for property ${propertyId}`); // DEBUG
     
     res.json({
       success: true,
