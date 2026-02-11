@@ -172,69 +172,64 @@ app.post('/api/sizes', async (req, res) => {
 // ============================================
 // ENDPOINT 4: Search Properties
 // ============================================
+
 app.post('/api/search-properties', async (req, res) => {
   try {
     const { tenantId, interest, location, bedrooms, plotSize, budget } = req.body;
     
-    if (!tenantId || !interest || !location) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'tenantId, interest, and location are required' 
-      });
-    }
+    // Start base filter
+    let conditions = [
+      `{TenantID} = '${tenantId}'`,
+      `{Type} = '${interest}'`,
+      `{Location} = '${location}'`,
+      `{Available} = 1`
+    ];
     
-    // Build filter
-    let filter = `AND({TenantID} = '${tenantId}', {Type} = '${interest}', {Location} = '${location}', {Available} = 1`;
-    
+    // Handle Land Size
     if (interest === 'Land' && plotSize) {
-      // Fuzzy match for plot size - match "1/4" to "1/4 Acre" or "1/4"
-      filter += `, FIND('${plotSize}', {Plot Size})`;
-    } else if (interest !== 'Land' && bedrooms) {
-      // Extract number from "3 bedroom" format
-      let bedroomNumber = bedrooms;
-      if (typeof bedrooms === 'string') {
-        const match = bedrooms.match(/\d+/);
-        bedroomNumber = match ? parseInt(match[0]) : bedrooms;
+      // Use FIND to allow partial matches (e.g., "1/4" matches "1/4 Acre")
+      conditions.push(`FIND('${plotSize}', {Plot Size})`);
+    } 
+    // Handle Bedrooms (Houses/Apartments)
+    else if (interest !== 'Land' && bedrooms) {
+      const match = String(bedrooms).match(/\d+/);
+      if (match) {
+        conditions.push(`{Bedrooms} = ${parseInt(match[0])}`);
       }
-      filter += `, {Bedrooms} = ${parseInt(bedroomNumber)}`;
     }
     
-    if (budget) {
-      filter += `, {Price} <= ${budget}`;
+    // Handle Budget
+    if (budget && !isNaN(budget)) {
+      conditions.push(`{Price} <= ${budget}`);
     }
     
-    filter += ')';
-    
-    console.log('Search filter:', filter); // DEBUG LOG
-    
+    const finalFilter = `AND(${conditions.join(',')})`;
+    console.log('Final Airtable Filter:', finalFilter); // Check your console for this!
+
     const records = await base('Properties')
       .select({
-        filterByFormula: filter,
-        maxRecords: 3,
-        sort: [{ field: 'Price', direction: 'asc' }],
+        filterByFormula: finalFilter,
+        maxRecords: 10, // Fetch more than 3 to allow manual sorting
         fields: ['Property Name', 'Price', 'Bedrooms', 'Location', 'Address', 'Plot Size', 'Type', 'Photo URL']
       })
       .all();
     
-    // Sort again to be absolutely sure (Airtable sometimes doesn't respect sort)
-    const sortedRecords = records.sort((a, b) => {
-      const priceA = a.get('Price') || 0;
-      const priceB = b.get('Price') || 0;
-      return priceA - priceB;
-    });
-    
-    const properties = sortedRecords.map((record, index) => ({
-      number: index + 1,
-      id: record.id,
-      name: record.get('Property Name'),
-      price: record.get('Price'),
-      bedrooms: record.get('Bedrooms'),
-      location: record.get('Location'),
-      address: record.get('Address'),
-      plotSize: record.get('Plot Size'),
-      type: record.get('Type'),
-      photoUrl: record.get('Photo URL') || ''
-    }));
+    // Manual sort and limit to top 3 cheapest
+    const properties = records
+      .map((r, index) => ({
+        id: r.id,
+        name: r.get('Property Name'),
+        price: r.get('Price'),
+        bedrooms: r.get('Bedrooms'),
+        location: r.get('Location'),
+        address: r.get('Address'),
+        plotSize: r.get('Plot Size'),
+        type: r.get('Type'),
+        photoUrl: r.get('Photo URL') || ''
+      }))
+      .sort((a, b) => (a.price || 0) - (b.price || 0))
+      .slice(0, 3)
+      .map((p, i) => ({ ...p, number: i + 1 }));
     
     res.json({
       success: true,
@@ -243,7 +238,7 @@ app.post('/api/search-properties', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error in search-properties:', error);
+    console.error('Search Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
