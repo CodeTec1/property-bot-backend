@@ -170,75 +170,114 @@ app.post('/api/sizes', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 4: Search Properties
+// ENDPOINT 4: Search Properties (FIXED + DEBUG)
 // ============================================
 
 app.post('/api/search-properties', async (req, res) => {
   try {
     const { tenantId, interest, location, bedrooms, plotSize, budget } = req.body;
-    
-    // Start base filter
+
+    // ---------------- DEBUG INPUT ----------------
+    console.log("====== SEARCH REQUEST RECEIVED ======");
+    console.log("REQ BODY:", req.body);
+    console.log("tenantId:", tenantId);
+    console.log("interest:", interest);
+    console.log("location:", location);
+    console.log("bedrooms:", bedrooms);
+    console.log("plotSize:", plotSize);
+    console.log("budget:", budget);
+    console.log("====================================");
+
+    if (!tenantId || !interest || !location) {
+      return res.status(400).json({
+        success: false,
+        error: 'tenantId, interest, and location are required'
+      });
+    }
+
     let conditions = [
       `{TenantID} = '${tenantId}'`,
       `{Type} = '${interest}'`,
       `{Location} = '${location}'`,
       `{Available} = 1`
     ];
-    
-    // Handle Land Size
+
+    // ---------- LAND ----------
     if (interest === 'Land' && plotSize) {
-      // Use FIND to allow partial matches (e.g., "1/4" matches "1/4 Acre")
-      conditions.push(`FIND('${plotSize}', {Plot Size})`);
-    } 
-    // Handle Bedrooms (Houses/Apartments)
-    else if (interest !== 'Land' && bedrooms) {
-      const match = String(bedrooms).match(/\d+/);
-      if (match) {
-        conditions.push(`{Bedrooms} = ${parseInt(match[0])}`);
+      conditions.push(
+        `FIND(LOWER('${plotSize}'), LOWER({Plot Size}&""))`
+      );
+    }
+
+    // ---------- HOUSES ----------
+    if (interest !== 'Land' && bedrooms) {
+      let bedroomNumber = bedrooms;
+
+      if (typeof bedrooms === 'string') {
+        const match = bedrooms.match(/\d+/);
+        bedroomNumber = match ? parseInt(match[0]) : null;
+      }
+
+      if (bedroomNumber) {
+        conditions.push(`{Bedrooms} = ${parseInt(bedroomNumber)}`);
       }
     }
-    
-    // Handle Budget
+
+    // ---------- BUDGET ----------
     if (budget && !isNaN(budget)) {
       conditions.push(`{Price} <= ${budget}`);
     }
-    
-    const finalFilter = `AND(${conditions.join(',')})`;
-    console.log('Final Airtable Filter:', finalFilter); // Check your console for this!
+
+    const filter = `AND(${conditions.join(',')})`;
+
+    // ---------------- DEBUG FILTER ----------------
+    console.log("FINAL FILTER:", filter);
 
     const records = await base('Properties')
       .select({
-        filterByFormula: finalFilter,
-        maxRecords: 10, // Fetch more than 3 to allow manual sorting
-        fields: ['Property Name', 'Price', 'Bedrooms', 'Location', 'Address', 'Plot Size', 'Type', 'Photo URL']
+        filterByFormula: filter,
+        maxRecords: 10,
+        fields: [
+          'Property Name',
+          'Price',
+          'Bedrooms',
+          'Location',
+          'Address',
+          'Plot Size',
+          'Type',
+          'Photo URL'
+        ]
       })
       .all();
-    
-    // Manual sort and limit to top 3 cheapest
+
+    console.log("RECORDS FOUND:", records.length);
+
     const properties = records
-      .map((r, index) => ({
-        id: r.id,
-        name: r.get('Property Name'),
-        price: r.get('Price'),
-        bedrooms: r.get('Bedrooms'),
-        location: r.get('Location'),
-        address: r.get('Address'),
-        plotSize: r.get('Plot Size'),
-        type: r.get('Type'),
-        photoUrl: r.get('Photo URL') || ''
+      .map((record, index) => ({
+        number: index + 1,
+        id: record.id,
+        name: record.get('Property Name'),
+        price: record.get('Price'),
+        bedrooms: record.get('Bedrooms'),
+        location: record.get('Location'),
+        address: record.get('Address'),
+        plotSize: record.get('Plot Size'),
+        type: record.get('Type'),
+        photoUrl: record.get('Photo URL') || ''
       }))
       .sort((a, b) => (a.price || 0) - (b.price || 0))
-      .slice(0, 3)
-      .map((p, i) => ({ ...p, number: i + 1 }));
-    
+      .slice(0, 3);
+
+    console.log("RETURNING:", properties.length);
+
     res.json({
       success: true,
-      properties: properties,
+      properties,
       count: properties.length
     });
-    
+
   } catch (error) {
-    console.error('Search Error:', error);
+    console.error('Error in search-properties:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
