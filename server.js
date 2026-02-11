@@ -203,14 +203,16 @@ app.post('/api/search-properties', async (req, res) => {
     ];
 
     // ---------- LAND ----------
-    if (interest === 'Land' && plotSize) {
+    if (interest === 'Land' && plotSize && !plotSize.toLowerCase().includes('bedroom')) {
+
       conditions.push(
         `FIND(LOWER('${plotSize}'), LOWER({Plot Size}&""))`
       );
     }
 
     // ---------- HOUSES ----------
-    if (interest !== 'Land' && bedrooms) {
+    if (interest !== 'Land' && bedrooms && !bedrooms.toLowerCase().includes('/')) {
+
       let bedroomNumber = bedrooms;
 
       if (typeof bedrooms === 'string') {
