@@ -579,12 +579,110 @@ app.post('/api/create-booking', async (req, res) => {
     }
     
     if (existingEvents.data.items && existingEvents.data.items.length > 0) {
-      console.log('SLOT TAKEN! Returning error...');
-      return res.json({
-        success: false,
-        slotTaken: true,
-        message: "⚠️ Sorry, that time slot was just taken!\n\nPlease choose another time."
-      });
+      console.log('SLOT TAKEN! Recalculating new slots...');
+      
+      // Recalculate new slots by calling the slots endpoint
+      try {
+        // We need to recalculate slots - make internal call
+        const now = new Date();
+        const endDate = new Date(now);
+        endDate.setDate(endDate.getDate() + 30);
+        
+        const allEvents = await calendar.events.list({
+          calendarId: calendarId,
+          timeMin: now.toISOString(),
+          timeMax: endDate.toISOString(),
+          q: propertyId,
+          singleEvents: true,
+          orderBy: 'startTime'
+        });
+        
+        const bookedEvents = allEvents.data.items || [];
+        const booked = bookedEvents.map(event => ({
+          start: new Date(event.start.dateTime || event.start.date),
+          end: new Date(event.end.dateTime || event.end.date)
+        }));
+        
+        // Recalculate slots (same logic as slots endpoint)
+        const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000));
+        const newFreeSlots = [];
+        const MAX_SEARCH_DAYS = 30;
+        
+        function overlaps(start, end) {
+          return booked.some(b => start < b.end && end > b.start);
+        }
+        
+        function isWorkingDay(d) {
+          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          const dayName = dayNames[d.getDay()];
+          return "Monday, Tuesday, Wednesday, Thursday, Friday".includes(dayName);
+        }
+        
+        for (let i = 0; i < MAX_SEARCH_DAYS && newFreeSlots.length < 5; i++) {
+          const day = new Date(now);
+          day.setDate(day.getDate() + i);
+          day.setHours(0, 0, 0, 0);
+          
+          if (!isWorkingDay(day)) continue;
+          
+          for (let h = 9; h < 17 && newFreeSlots.length < 5; h++) {
+            const slotStart = new Date(day);
+            slotStart.setHours(h, 0, 0, 0);
+            
+            const slotEnd = new Date(slotStart);
+            slotEnd.setMinutes(slotEnd.getMinutes() + 60);
+            
+            if (slotStart <= minSlotTime) continue;
+            if (overlaps(slotStart, slotEnd)) continue;
+            
+            newFreeSlots.push({
+              number: newFreeSlots.length + 1,
+              start: slotStart.toISOString(),
+              end: slotEnd.toISOString(),
+              displayDate: slotStart.toLocaleDateString('en-KE', { 
+                weekday: 'short', 
+                month: 'short', 
+                day: 'numeric' 
+              }),
+              displayTime: slotStart.toLocaleTimeString('en-KE', { 
+                hour: 'numeric', 
+                minute: '2-digit',
+                hour12: true 
+              })
+            });
+          }
+        }
+        
+        // Create new slot map
+        const newSlotMap = {};
+        newFreeSlots.forEach(slot => {
+          newSlotMap[slot.number] = `${slot.start}|${slot.end}`;
+        });
+        
+        const newSlotsMessage = newFreeSlots.length > 0
+          ? `⚠️ Sorry, that time slot was just taken!\n\n📅 Here are the updated available times:\n\n` + 
+            newFreeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
+            `\n\nReply with slot number.`
+          : `⚠️ Sorry, that time slot was taken and no other slots are available.\n\nOur agent will contact you!`;
+        
+        console.log('Recalculated', newFreeSlots.length, 'new slots');
+        
+        return res.json({
+          success: false,
+          slotTaken: true,
+          message: newSlotsMessage,
+          newSlots: newFreeSlots,
+          newSlotMap: JSON.stringify(newSlotMap)
+        });
+        
+      } catch (recalcErr) {
+        console.error('Failed to recalculate slots:', recalcErr.message);
+        return res.json({
+          success: false,
+          slotTaken: true,
+          message: "⚠️ Sorry, that time slot was just taken!\n\nPlease try booking again or contact our agent."
+        });
+      }
     }
     
     console.log('Slot is free! Creating booking...');
@@ -711,11 +809,16 @@ app.post('/api/create-booking', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 7: Cancel Booking (Multi-Tenant)
+// ENDPOINT 7: Cancel Booking (Multi-Tenant) WITH DEBUG
 // ============================================
 app.post('/api/cancel-booking', async (req, res) => {
   try {
     const { leadId, calendarId } = req.body;
+    
+    console.log('========================================');
+    console.log('CANCEL BOOKING REQUEST:');
+    console.log('leadId:', leadId);
+    console.log('calendarId:', calendarId);
     
     // Validate
     if (!leadId) {
@@ -726,6 +829,9 @@ app.post('/api/cancel-booking', async (req, res) => {
     }
     
     // Search for active booking for this lead
+    console.log('Searching for bookings...');
+    console.log('Filter formula:', `AND(SEARCH("${leadId}", ARRAYJOIN({Lead})), {Status} != "Cancelled")`);
+    
     const bookings = await base('Bookings')
       .select({
         filterByFormula: `AND(SEARCH("${leadId}", ARRAYJOIN({Lead})), {Status} != "Cancelled")`,
@@ -733,7 +839,10 @@ app.post('/api/cancel-booking', async (req, res) => {
       })
       .all();
     
+    console.log('Bookings found:', bookings.length);
+    
     if (bookings.length === 0) {
+      console.log('NO BOOKINGS FOUND!');
       return res.json({
         success: false,
         noBooking: true,
@@ -843,6 +952,7 @@ app.post('/api/cancel-booking', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 // ============================================
 // Start Server
