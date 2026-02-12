@@ -308,6 +308,10 @@ app.post('/api/search-properties', async (req, res) => {
   }
 });
 
+// ============================================
+// ENDPOINT 5: Get Available Slots (Multi-Tenant) WITH DEBUG
+// ============================================
+
 app.post('/api/available-slots-v2', async (req, res) => {
   try {
     const { 
@@ -476,9 +480,8 @@ app.post('/api/available-slots-v2', async (req, res) => {
 
 
 // ============================================
-// ENDPOINT 6: Create Booking (Multi-Tenant)
+// ENDPOINT 6: Create Booking (Multi-Tenant) WITH DEBUG
 // ============================================
-console.log('CREATE BOOKING REQUEST BODY:', req.body);
 app.post('/api/create-booking', async (req, res) => {
   try {
     const { 
@@ -491,39 +494,96 @@ app.post('/api/create-booking', async (req, res) => {
       calendarId 
     } = req.body;
     
-    // Validate
-    if (!leadId || !propertyId || !slotNumber || !slotMap || !calendarId) {
+    console.log('========================================');
+    console.log('CREATE BOOKING REQUEST:');
+    console.log('Input data:', JSON.stringify(req.body, null, 2));
+    console.log('leadId:', leadId, '(type:', typeof leadId, ')');
+    console.log('propertyId:', propertyId, '(type:', typeof propertyId, ')');
+    console.log('slotNumber:', slotNumber, '(type:', typeof slotNumber, ')');
+    console.log('slotMap:', slotMap ? 'Present' : 'MISSING', '(length:', slotMap?.length, ')');
+    console.log('leadName:', leadName, '(type:', typeof leadName, ')');
+    console.log('leadPhone:', leadPhone, '(type:', typeof leadPhone, ')');
+    console.log('calendarId:', calendarId, '(type:', typeof calendarId, ')');
+    
+    // Validate - check each field individually
+    const missingFields = [];
+    if (!leadId) missingFields.push('leadId');
+    if (!propertyId) missingFields.push('propertyId');
+    if (!slotNumber) missingFields.push('slotNumber');
+    if (!slotMap) missingFields.push('slotMap');
+    if (!calendarId) missingFields.push('calendarId');
+    
+    if (missingFields.length > 0) {
+      console.log('ERROR: Missing fields:', missingFields.join(', '));
       return res.status(400).json({ 
         success: false, 
-        error: 'Missing required fields' 
+        error: 'Missing required fields: ' + missingFields.join(', ')
       });
     }
     
+    console.log('All required fields present ✓');
+    
     // Parse slot map
-    const slots = JSON.parse(slotMap);
+    console.log('Parsing slot map...');
+    let slots;
+    try {
+      slots = JSON.parse(slotMap);
+      console.log('Slot map parsed successfully');
+      console.log('Available slot numbers:', Object.keys(slots).join(', '));
+    } catch (parseErr) {
+      console.log('ERROR: Failed to parse slot map');
+      console.log('slotMap value:', slotMap);
+      console.log('Parse error:', parseErr.message);
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Invalid slot map format' 
+      });
+    }
+    
     const slotData = slots[slotNumber];
     
     if (!slotData) {
+      console.log('ERROR: Invalid slot number');
+      console.log('Requested slot:', slotNumber);
+      console.log('Available slots:', Object.keys(slots).join(', '));
       return res.status(400).json({ 
         success: false, 
-        error: 'Invalid slot number' 
+        error: 'Invalid slot number. Available: ' + Object.keys(slots).join(', ')
       });
     }
+    
+    console.log('Slot data found:', slotData);
     
     const [startTime, endTime] = slotData.split('|');
     const slotStart = new Date(startTime);
     const slotEnd = new Date(endTime);
     
+    console.log('Slot time:', slotStart.toLocaleString('en-KE'), 'to', slotEnd.toLocaleString('en-KE'));
+    
     // Check if slot is still available (collision detection)
-    const existingEvents = await calendar.events.list({
-      calendarId: calendarId,
-      timeMin: slotStart.toISOString(),
-      timeMax: slotEnd.toISOString(),
-      q: propertyId,
-      singleEvents: true
-    });
+    console.log('Checking for booking conflicts...');
+    console.log('Calendar ID:', calendarId);
+    
+    let existingEvents;
+    try {
+      existingEvents = await calendar.events.list({
+        calendarId: calendarId,
+        timeMin: slotStart.toISOString(),
+        timeMax: slotEnd.toISOString(),
+        q: propertyId,
+        singleEvents: true
+      });
+      console.log('Calendar checked - found', existingEvents.data.items?.length || 0, 'conflicting events');
+    } catch (calErr) {
+      console.error('Calendar API ERROR:', calErr.message);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to check calendar: ' + calErr.message 
+      });
+    }
     
     if (existingEvents.data.items && existingEvents.data.items.length > 0) {
+      console.log('SLOT TAKEN! Someone already booked this time');
       // Slot is taken! Recalculate new slots
       return res.json({
         success: false,
@@ -532,7 +592,10 @@ app.post('/api/create-booking', async (req, res) => {
       });
     }
     
+    console.log('Slot is free! Proceeding with booking...');
+    
     // Get property details
+    console.log('Fetching property details...');
     const propertyRecord = await base('Properties').find(propertyId);
     const propertyName = propertyRecord.get('Property Name');
     const propertyAddress = propertyRecord.get('Address');
@@ -540,7 +603,11 @@ app.post('/api/create-booking', async (req, res) => {
     const agentPhone = propertyRecord.get('Agent Phone');
     const agentName = propertyRecord.get('Agent Name');
     
+    console.log('Property:', propertyName);
+    console.log('Agent:', agentName, agentEmail);
+    
     // Create Google Calendar event
+    console.log('Creating calendar event...');
     const event = {
       summary: `Property Viewing - ${propertyName}`,
       description: `Client: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}`,
@@ -556,21 +623,52 @@ app.post('/api/create-booking', async (req, res) => {
       attendees: agentEmail ? [{ email: agentEmail }] : []
     };
     
-    const calendarEvent = await calendar.events.insert({
-      calendarId: calendarId,
-      resource: event,
-      sendUpdates: 'all'
-    });
+    let calendarEvent;
+    try {
+      calendarEvent = await calendar.events.insert({
+        calendarId: calendarId,
+        resource: event,
+        sendUpdates: 'all'
+      });
+      console.log('Calendar event created:', calendarEvent.data.id);
+    } catch (calErr) {
+      console.error('Failed to create calendar event:', calErr.message);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to create calendar event: ' + calErr.message 
+      });
+    }
     
     // Create Airtable booking record
-    const bookingRecord = await base('Bookings').create({
-      'Lead': [leadId],
-      'Property': [propertyId],
-      'Scheduled Time': slotStart.toISOString(),
-      'Status': 'Scheduled',
-      'Google Event ID': calendarEvent.data.id,
-      'SlotKey': `${propertyId}_${slotStart.toISOString()}`
-    });
+    console.log('Creating Airtable booking record...');
+    let bookingRecord;
+    try {
+      bookingRecord = await base('Bookings').create({
+        'Lead': [leadId],
+        'Property': [propertyId],
+        'Scheduled Time': slotStart.toISOString(),
+        'Status': 'Scheduled',
+        'Google Event ID': calendarEvent.data.id,
+        'SlotKey': `${propertyId}_${slotStart.toISOString()}`
+      });
+      console.log('Booking created:', bookingRecord.id);
+    } catch (airtableErr) {
+      console.error('Failed to create Airtable booking:', airtableErr.message);
+      // Try to delete calendar event since booking failed
+      try {
+        await calendar.events.delete({
+          calendarId: calendarId,
+          eventId: calendarEvent.data.id
+        });
+        console.log('Calendar event deleted (cleanup)');
+      } catch (cleanupErr) {
+        console.error('Failed to cleanup calendar event:', cleanupErr.message);
+      }
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to create booking: ' + airtableErr.message 
+      });
+    }
     
     // Format confirmation message
     const confirmMessage = `✅ *Viewing Confirmed!*\n\n` +
@@ -593,6 +691,11 @@ app.post('/api/create-booking', async (req, res) => {
       `⏰ ${slotStart.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
       `✅ Added to your calendar`;
     
+    console.log('BOOKING SUCCESSFUL!');
+    console.log('Booking ID:', bookingRecord.id);
+    console.log('Calendar Event ID:', calendarEvent.data.id);
+    console.log('========================================');
+    
     res.json({
       success: true,
       slotTaken: false,
@@ -612,7 +715,8 @@ app.post('/api/create-booking', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error in create-booking:', error);
+    console.error('ERROR in create-booking:', error);
+    console.error('Stack:', error.stack);
     res.status(500).json({ success: false, error: error.message });
   }
 });
