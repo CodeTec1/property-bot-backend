@@ -664,8 +664,7 @@ app.post('/api/create-booking', async (req, res) => {
   'StartDateTime': slotStart.toISOString(),
   'EndDateTime': slotEnd.toISOString(),
   'Status': 'Scheduled',
-  'Google Event ID': calendarEvent.data.id,
-  'SlotKey': `${propertyId}_${slotStart.toISOString()}`
+  'Google Event ID': calendarEvent.data.id
 });
 
     } catch (airtableErr) {
