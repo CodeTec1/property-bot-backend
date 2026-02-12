@@ -659,13 +659,15 @@ app.post('/api/create-booking', async (req, res) => {
     let bookingRecord;
     try {
       bookingRecord = await base('Bookings').create({
-        'Lead': [leadId],
-        'Property': [propertyId],
-        'Scheduled Time': slotStart.toISOString(),
-        'Status': 'Scheduled',
-        'Google Event ID': calendarEvent.data.id,
-        'SlotKey': `${propertyId}_${slotStart.toISOString()}`
-      });
+  'Lead': [leadId],
+  'Property': [propertyId],
+  'StartDateTime': slotStart.toISOString(),
+  'EndDateTime': slotEnd.toISOString(),
+  'Status': 'Scheduled',
+  'Google Event ID': calendarEvent.data.id,
+  'SlotKey': `${propertyId}_${slotStart.toISOString()}`
+});
+
     } catch (airtableErr) {
       try {
         await calendar.events.delete({
