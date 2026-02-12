@@ -39,6 +39,11 @@ function cacheTenant(tenantId, data) {
   };
 }
 
+function toNairobiDate(date) {
+  return new Date(new Date(date).toLocaleString("en-US", { timeZone: "Africa/Nairobi" }));
+}
+
+
 // ============================================
 // Health Check
 // ============================================
@@ -316,123 +321,79 @@ app.post('/api/available-slots-v2', async (req, res) => {
   try {
     const { 
       propertyId, 
-      leadId, 
       calendarId,
-      workStart,      // Airtable datetime string
-      workEnd,        // Airtable datetime string
-      daysAhead,      // number from tenant table
-      workingDays     // string like "Mon, Tue, Wed, Sat"
+      workStart,
+      workEnd,
+      daysAhead,
+      workingDays,
+      slotDuration = 60
     } = req.body;
 
-    console.log('========================================');
-    console.log('SLOT CALCULATION REQUEST:');
-    console.log('Input data:', JSON.stringify(req.body, null, 2));
-    console.log('propertyId:', propertyId);
-    console.log('calendarId:', calendarId);
-    console.log('workStart:', workStart, 'workEnd:', workEnd);
-    console.log('daysAhead:', daysAhead);
-    console.log('workingDays:', workingDays);
-
-    // Validate required fields
-    if (!propertyId) return res.status(400).json({ success: false, error: 'Property ID is required' });
-    if (!calendarId) return res.status(400).json({ success: false, error: 'Calendar ID is required' });
-
-    // Fetch property record
-    let propertyRecord;
-    try {
-      propertyRecord = await base('Properties').find(propertyId);
-      console.log('Property found:', propertyRecord.get('Property Name'));
-    } catch (err) {
-      return res.status(404).json({ success: false, error: `Property not found: ${propertyId}` });
+    if (!propertyId || !calendarId) {
+      return res.status(400).json({ success:false, error:'Missing propertyId or calendarId' });
     }
-    const propertyName = propertyRecord.get('Property Name');
 
-    // Parse workStart/workEnd to hours
-    const workStartHour = workStart ? new Date(workStart).getHours() : 9;
-    const workEndHour = workEnd ? new Date(workEnd).getHours() : 17;
+    const propertyRecord = await base('Properties').find(propertyId);
 
-    // Parse workingDays into lowercase 3-letter abbreviations
+    const workStartHour = workStart ? toNairobiDate(workStart).getHours() : 9;
+    const workEndHour   = workEnd   ? toNairobiDate(workEnd).getHours()   : 17;
+
     const workingDaysArray = workingDays
       ? workingDays.split(',').map(d => d.trim().slice(0,3).toLowerCase())
       : ['mon','tue','wed','thu','fri'];
 
-    // Fetch booked events from Google Calendar
-    const now = new Date();
+    const now = toNairobiDate(new Date());
     const searchEnd = new Date(now);
     searchEnd.setDate(searchEnd.getDate() + Number(daysAhead || 7));
 
-    console.log('Current time (Kenya):', now.toLocaleString('en-KE'));
-    console.log('Searching calendar from:', now.toISOString());
-    console.log('Searching calendar to:', searchEnd.toISOString());
-    console.log('Calendar ID:', calendarId);
+    // ---- Google bookings
+    const calendarResponse = await calendar.events.list({
+      calendarId,
+      timeMin: now.toISOString(),
+      timeMax: searchEnd.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime'
+    });
 
-    let calendarResponse;
-    try {
-      calendarResponse = await calendar.events.list({
-        calendarId,
-        timeMin: now.toISOString(),
-        timeMax: searchEnd.toISOString(),
-        q: propertyId,
-        singleEvents: true,
-        orderBy: 'startTime'
-      });
-      console.log('Calendar API response received');
-    } catch (calErr) {
-      console.error('Calendar API ERROR:', calErr.message);
-      return res.status(500).json({ success: false, error: 'Failed to access calendar: ' + calErr.message });
-    }
-
-    const bookedEvents = calendarResponse.data.items || [];
-    console.log('Booked events found:', bookedEvents.length);
-
-    const booked = bookedEvents.map(event => ({
-      start: new Date(event.start.dateTime || event.start.date),
-      end: new Date(event.end.dateTime || event.end.date)
+    const googleBooked = (calendarResponse.data.items || []).map(e => ({
+      start: toNairobiDate(e.start.dateTime || e.start.date),
+      end:   toNairobiDate(e.end.dateTime   || e.end.date)
     }));
 
-    const minSlotTime = new Date(now.getTime() + 60*60*1000); // 1 hour buffer
+    // ---- Airtable bookings
+    const airtableRows = await base('Bookings').select({
+      filterByFormula: `AND({PropertyUID}='${propertyId}', {Status}='Scheduled')`
+    }).all();
+
+    const airtableBooked = airtableRows.map(b => ({
+      start: toNairobiDate(b.get('StartDateTime')),
+      end:   toNairobiDate(b.get('EndDateTime'))
+    }));
+
+    const booked = [...googleBooked, ...airtableBooked];
+
+    const overlaps = (s,e) => booked.some(b => s < b.end && e > b.start);
+
     const freeSlots = [];
-    const MAX_SEARCH_DAYS = 30;
-
-    console.log('Starting slot generation...');
-    console.log('Work hours:', workStartHour, 'to', workEndHour);
-    console.log('Working days:', workingDaysArray.join(', '));
-
-    const overlaps = (start, end) => booked.some(b => start < b.end && end > b.start);
-
     const dayNameMap = ['sun','mon','tue','wed','thu','fri','sat'];
 
-    let daysChecked = 0, slotsSkippedPast = 0, slotsSkippedWeekend = 0, slotsSkippedOverlap = 0;
-
-    for (let i = 0; i < MAX_SEARCH_DAYS && freeSlots.length < 5; i++) {
+    for (let i = 0; i < 30 && freeSlots.length < 5; i++) {
       const day = new Date(now);
       day.setDate(day.getDate() + i);
       day.setHours(0,0,0,0);
-      daysChecked++;
 
       const dayAbbr = dayNameMap[day.getDay()];
-      if (!workingDaysArray.includes(dayAbbr)) {
-        console.log(`Day ${i+1} (${dayAbbr}): Skipped - not a working day`);
-        slotsSkippedWeekend++;
-        continue;
-      }
+      if (!workingDaysArray.includes(dayAbbr)) continue;
 
-      console.log(`Day ${i+1} (${day.toDateString()}): Checking slots...`);
-      for (let h = workStartHour; h < workEndHour && freeSlots.length < 5; h++) {
+      for (let h = workStartHour; h < workEndHour; h += slotDuration/60) {
         const slotStart = new Date(day);
         slotStart.setHours(h,0,0,0);
+
         const slotEnd = new Date(slotStart);
-        slotEnd.setMinutes(slotEnd.getMinutes() + 60);
+        slotEnd.setMinutes(slotEnd.getMinutes() + Number(slotDuration));
 
-        if (slotStart <= minSlotTime) {
-          slotsSkippedPast++;
-          continue;
-        }
-
-        if (overlaps(slotStart, slotEnd)) {
-          slotsSkippedOverlap++;
-          continue;
-        }
+        if (slotStart <= now) continue;
+        if (overlaps(slotStart, slotEnd)) continue;
 
         freeSlots.push({
           number: freeSlots.length + 1,
@@ -444,367 +405,99 @@ app.post('/api/available-slots-v2', async (req, res) => {
       }
     }
 
-    console.log('Slot generation complete:');
-    console.log('Days checked:', daysChecked);
-    console.log('Slots skipped (past):', slotsSkippedPast);
-    console.log('Slots skipped (non-working):', slotsSkippedWeekend);
-    console.log('Slots skipped (overlapping):', slotsSkippedOverlap);
-    console.log('FREE SLOTS FOUND:', freeSlots.length);
-
     const slotMap = {};
-    freeSlots.forEach(slot => {
-      slotMap[slot.number] = `${slot.start}|${slot.end}`;
-    });
+    freeSlots.forEach(s => slotMap[s.number] = `${s.start}|${s.end}`);
 
-    const message = freeSlots.length > 0
-      ? `📅 Available viewings:\n\n` +
-        freeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
-        `\n\nReply with slot number.`
-      : `Sorry, no available slots found in the next ${MAX_SEARCH_DAYS} days.\n\nOur agent will contact you to arrange a viewing!\n\nReply HI to search for more properties.`;
+    const message = `📅 Available viewings:\n\n` +
+      freeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
+      `\n\nReply with slot number.`;
 
     res.json({
-      success: true,
+      success:true,
       slots: freeSlots,
       slotMap: JSON.stringify(slotMap),
-      message,
       count: freeSlots.length,
-      propertyName
+      message
     });
 
-  } catch (error) {
-    console.error('ERROR in available-slots-v2:', error);
-    console.error('Stack:', error.stack);
-    res.status(500).json({ success: false, error: error.message });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success:false, error:err.message });
   }
 });
+
 
 // ============================================
 // ENDPOINT 6: Create Booking (Multi-Tenant) - COMPLETE VERSION
 // ============================================
 app.post('/api/create-booking', async (req, res) => {
   try {
-    const { 
-      leadId, 
-      propertyId, 
-      slotNumber, 
-      slotMap, 
-      leadName, 
-      leadPhone,
-      calendarId 
-    } = req.body;
-    
-    console.log('========================================');
-    console.log('CREATE BOOKING REQUEST:');
-    console.log('Input data:', JSON.stringify(req.body, null, 2));
-    
-    // Validate required fields
-    const missingFields = [];
-    if (!leadId) missingFields.push('leadId');
-    if (!propertyId) missingFields.push('propertyId');
-    if (!slotNumber) missingFields.push('slotNumber');
-    if (!slotMap) missingFields.push('slotMap');
-    if (!calendarId) missingFields.push('calendarId');
-    
-    if (missingFields.length > 0) {
-      console.log('ERROR: Missing fields:', missingFields.join(', '));
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Missing required fields: ' + missingFields.join(', ')
-      });
-    }
-    
-    console.log('All required fields present ✓');
-    
-    // Parse slot map (handle both string and object)
-    console.log('Processing slot map...');
-    let slots = slotMap;
+    const { leadId, propertyId, slotNumber, slotMap, leadName, leadPhone, calendarId } = req.body;
 
-    if (typeof slotMap === 'string') {
-      try {
-        slots = JSON.parse(slotMap);
-        console.log('Slot map parsed from string ✓');
-      } catch (err) {
-        console.log('ERROR: Failed to parse slotMap');
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Invalid slot map format' 
-        });
-      }
-    }
-
-    if (typeof slots !== 'object' || Array.isArray(slots)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'slotMap must be a valid object' 
-      });
-    }
-
-    console.log('Available slot numbers:', Object.keys(slots).join(', '));
-
+    let slots = typeof slotMap === 'string' ? JSON.parse(slotMap) : slotMap;
     const slotData = slots[slotNumber];
+    if (!slotData) return res.json({ success:false, error:'Invalid slot' });
 
-    if (!slotData || !slotData.includes('|')) {
-      console.log('ERROR: Invalid slot number or format');
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Invalid slot number. Available: ' + Object.keys(slots).join(', ')
-      });
+    const [startTime,endTime] = slotData.split('|');
+
+    const slotStart = toNairobiDate(startTime);
+    const slotEnd   = toNairobiDate(endTime);
+
+    const slotKey = `${propertyId}_${slotStart.toISOString()}`;
+
+    // ---- SlotKey protection
+    const clash = await base('Bookings').select({
+      filterByFormula: `AND({SlotKey}='${slotKey}', {Status}='Scheduled')`
+    }).firstPage();
+
+    if (clash.length) {
+      return res.json({ success:false, slotTaken:true, message:'Slot already taken.' });
     }
 
-    const [startTime, endTime] = slotData.split('|');
-    const slotStart = new Date(startTime);
-    const slotEnd = new Date(endTime);
-
-    console.log('Slot time:', slotStart.toLocaleString('en-KE'), 'to', slotEnd.toLocaleString('en-KE'));
-
-    // Check for conflicts
-    console.log('Checking for booking conflicts...');
-    
-    let existingEvents;
-    try {
-      existingEvents = await calendar.events.list({
-        calendarId: calendarId,
-        timeMin: slotStart.toISOString(),
-        timeMax: slotEnd.toISOString(),
-        q: propertyId,
-        singleEvents: true
-      });
-      console.log('Calendar checked - found', existingEvents.data.items?.length || 0, 'conflicts');
-    } catch (calErr) {
-      console.error('Calendar API ERROR:', calErr.message);
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to check calendar: ' + calErr.message 
-      });
-    }
-    
-    if (existingEvents.data.items && existingEvents.data.items.length > 0) {
-      console.log('SLOT TAKEN! Recalculating new slots...');
-      
-      // Recalculate new slots by calling the slots endpoint
-      try {
-        // We need to recalculate slots - make internal call
-        const now = new Date();
-        const endDate = new Date(now);
-        endDate.setDate(endDate.getDate() + 30);
-        
-        const allEvents = await calendar.events.list({
-          calendarId: calendarId,
-          timeMin: now.toISOString(),
-          timeMax: endDate.toISOString(),
-          q: propertyId,
-          singleEvents: true,
-          orderBy: 'startTime'
-        });
-        
-        const bookedEvents = allEvents.data.items || [];
-        const booked = bookedEvents.map(event => ({
-          start: new Date(event.start.dateTime || event.start.date),
-          end: new Date(event.end.dateTime || event.end.date)
-        }));
-        
-        // Recalculate slots (same logic as slots endpoint)
-        const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000));
-        const newFreeSlots = [];
-        const MAX_SEARCH_DAYS = 30;
-        
-        function overlaps(start, end) {
-          return booked.some(b => start < b.end && end > b.start);
-        }
-        
-        function isWorkingDay(d) {
-          const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-          const dayName = dayNames[d.getDay()];
-          return "Monday, Tuesday, Wednesday, Thursday, Friday".includes(dayName);
-        }
-        
-        for (let i = 0; i < MAX_SEARCH_DAYS && newFreeSlots.length < 5; i++) {
-          const day = new Date(now);
-          day.setDate(day.getDate() + i);
-          day.setHours(0, 0, 0, 0);
-          
-          if (!isWorkingDay(day)) continue;
-          
-          for (let h = 9; h < 17 && newFreeSlots.length < 5; h++) {
-            const slotStart = new Date(day);
-            slotStart.setHours(h, 0, 0, 0);
-            
-            const slotEnd = new Date(slotStart);
-            slotEnd.setMinutes(slotEnd.getMinutes() + 60);
-            
-            if (slotStart <= minSlotTime) continue;
-            if (overlaps(slotStart, slotEnd)) continue;
-            
-            newFreeSlots.push({
-              number: newFreeSlots.length + 1,
-              start: slotStart.toISOString(),
-              end: slotEnd.toISOString(),
-              displayDate: slotStart.toLocaleDateString('en-KE', { 
-                weekday: 'short', 
-                month: 'short', 
-                day: 'numeric' 
-              }),
-              displayTime: slotStart.toLocaleTimeString('en-KE', { 
-                hour: 'numeric', 
-                minute: '2-digit',
-                hour12: true 
-              })
-            });
-          }
-        }
-        
-        // Create new slot map
-        const newSlotMap = {};
-        newFreeSlots.forEach(slot => {
-          newSlotMap[slot.number] = `${slot.start}|${slot.end}`;
-        });
-        
-        const newSlotsMessage = newFreeSlots.length > 0
-          ? `⚠️ Sorry, that time slot was just taken!\n\n📅 Here are the updated available times:\n\n` + 
-            newFreeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
-            `\n\nReply with slot number.`
-          : `⚠️ Sorry, that time slot was taken and no other slots are available.\n\nOur agent will contact you!`;
-        
-        console.log('Recalculated', newFreeSlots.length, 'new slots');
-        
-        return res.json({
-          success: false,
-          slotTaken: true,
-          message: newSlotsMessage,
-          newSlots: newFreeSlots,
-          newSlotMap: JSON.stringify(newSlotMap)
-        });
-        
-      } catch (recalcErr) {
-        console.error('Failed to recalculate slots:', recalcErr.message);
-        return res.json({
-          success: false,
-          slotTaken: true,
-          message: "⚠️ Sorry, that time slot was just taken!\n\nPlease try booking again or contact our agent."
-        });
-      }
-    }
-    
-    console.log('Slot is free! Creating booking...');
-    
-    // Get property details
     const propertyRecord = await base('Properties').find(propertyId);
     const propertyName = propertyRecord.get('Property Name');
     const propertyAddress = propertyRecord.get('Address');
     const agentEmail = propertyRecord.get('Agent Email');
     const agentPhone = propertyRecord.get('Agent Phone');
     const agentName = propertyRecord.get('Agent Name');
-    
-    console.log('Property:', propertyName);
-    console.log('Agent:', agentName);
-    
-    // Create Google Calendar event
-    const event = {
-      summary: `Property Viewing - ${propertyName}`,
-      description: `Client: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}`,
-      location: propertyAddress,
-      start: {
-        dateTime: slotStart.toISOString(),
-        timeZone: 'Africa/Nairobi'
-      },
-      end: {
-        dateTime: slotEnd.toISOString(),
-        timeZone: 'Africa/Nairobi'
-      },
-      attendees: agentEmail ? [{ email: agentEmail }] : []
-    };
-    
-    let calendarEvent;
-    try {
-      calendarEvent = await calendar.events.insert({
-        calendarId: calendarId,
-        resource: event,
-        sendUpdates: 'all'
-      });
-      console.log('Calendar event created:', calendarEvent.data.id);
-    } catch (calErr) {
-      console.error('Failed to create calendar event:', calErr.message);
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to create calendar event: ' + calErr.message 
-      });
-    }
-    
-    // Create Airtable booking
-    let bookingRecord;
-    try {
-      bookingRecord = await base('Bookings').create({
-        'Lead': [leadId],
-        'Property': [propertyId],
-        'StartDateTime': slotStart.toISOString(),
-        'EndDateTime': slotEnd.toISOString(),
-        'Status': 'Scheduled',
-        'Google Event ID': calendarEvent.data.id
-      });
-      console.log('Booking created:', bookingRecord.id);
-    } catch (airtableErr) {
-      console.error('Failed to create booking:', airtableErr.message);
-      // Cleanup calendar event
-      try {
-        await calendar.events.delete({
-          calendarId: calendarId,
-          eventId: calendarEvent.data.id
-        });
-        console.log('Calendar event deleted (cleanup)');
-      } catch {}
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to create booking: ' + airtableErr.message 
-      });
-    }
-    
-    // Format messages
-    const confirmMessage = `✅ *Viewing Confirmed!*\n\n` +
-      `🏠 *Property:* ${propertyName}\n` +
-      `📅 *Date:* ${slotStart.toLocaleDateString('en-KE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
-      `⏰ *Time:* ${slotStart.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
-      `📍 *Location:* ${propertyAddress}\n\n` +
-      `We'll send you a reminder. See you there! 🎉\n\n` +
-      `To cancel, reply *CANCEL*`;
-    
-    const agentMessage = `🔔 *NEW VIEWING SCHEDULED*\n\n` +
-      `📋 *CLIENT DETAILS:*\n` +
-      `Name: ${leadName}\n` +
-      `Phone: ${leadPhone}\n\n` +
-      `🏠 *PROPERTY:*\n` +
-      `${propertyName}\n` +
-      `${propertyAddress}\n\n` +
-      `📅 *SCHEDULED FOR:*\n` +
-      `${slotStart.toLocaleDateString('en-KE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
-      `⏰ ${slotStart.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
-      `✅ Added to your calendar`;
-    
-    console.log('BOOKING SUCCESSFUL!');
-    console.log('========================================');
-    
-    // Complete response with all fields
-    res.json({
-      success: true,
-      slotTaken: false,
-      bookingId: bookingRecord.id,
-      eventId: calendarEvent.data.id,
-      message: confirmMessage,
-      agentMessage: agentMessage,
-      agentEmail: agentEmail,
-      agentPhone: agentPhone,
-      agentName: agentName,
-      slotDetails: {
-        date: slotStart.toLocaleDateString('en-KE'),
-        time: slotStart.toLocaleTimeString('en-KE'),
-        property: propertyName,
-        address: propertyAddress
+
+    // ---- Calendar
+    const calendarEvent = await calendar.events.insert({
+      calendarId,
+      resource:{
+        summary:`Property Viewing - ${propertyName}`,
+        description:`Client: ${leadName}\nPhone: ${leadPhone}`,
+        location:propertyAddress,
+        start:{ dateTime:slotStart.toISOString(), timeZone:'Africa/Nairobi' },
+        end:{ dateTime:slotEnd.toISOString(), timeZone:'Africa/Nairobi' },
+        attendees: agentEmail ? [{email:agentEmail}] : []
       }
     });
-    
-  } catch (error) {
-    console.error('ERROR in create-booking:', error);
-    console.error('Stack:', error.stack);
-    res.status(500).json({ success: false, error: error.message });
+
+    // ---- Airtable
+    const bookingRecord = await base('Bookings').create({
+      'Lead':[leadId],
+      'Property':[propertyId],
+      'StartDateTime': slotStart.toISOString(),
+      'EndDateTime': slotEnd.toISOString(),
+      'Date': slotStart.toLocaleDateString('en-KE'),
+      'Time': slotStart.toLocaleTimeString('en-KE'),
+      'Agent Name': agentName,
+      'Agent Phone': agentPhone,
+      'Status':'Scheduled',
+      'SlotKey': slotKey,
+      'Google Event ID': calendarEvent.data.id
+    });
+
+    res.json({
+      success:true,
+      bookingId:bookingRecord.id,
+      message:`✅ Viewing confirmed for ${slotStart.toLocaleString('en-KE')}`
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success:false, error:err.message });
   }
 });
 
@@ -833,11 +526,12 @@ app.post('/api/cancel-booking', async (req, res) => {
     console.log('Filter formula:', `AND(SEARCH("${leadId}", ARRAYJOIN({Lead})), {Status} != "Cancelled")`);
     
     const bookings = await base('Bookings')
-      .select({
-        filterByFormula: `AND(SEARCH("${leadId}", ARRAYJOIN({Lead})), {Status} != "Cancelled")`,
-        maxRecords: 1
-      })
-      .all();
+  .select({
+    filterByFormula: `AND(FIND("${leadId}", ARRAYJOIN(RECORD_ID({Lead}))), {Status} != "Cancelled")`,
+    maxRecords: 1
+  })
+  .all();
+
     
     console.log('Bookings found:', bookings.length);
     
@@ -876,7 +570,8 @@ app.post('/api/cancel-booking', async (req, res) => {
     const leadPhone = lead.get('Phone');
     
     // Get booking time
-    const scheduledTime = new Date(booking.get('Scheduled Time'));
+    const scheduledTime = new Date(booking.get('StartDateTime'));
+
     
     // Delete Google Calendar event
     try {
