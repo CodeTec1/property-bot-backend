@@ -836,32 +836,36 @@ app.post('/api/cancel-booking', async (req, res) => {
     const bookings = await base('Bookings')
       .select({
         filterByFormula: searchFormula,
-        maxRecords: 10 // Get more to see what's there
+        maxRecords: 10
       })
       .all();
     
     console.log('Bookings found:', bookings.length);
     
     if (bookings.length === 0) {
-      console.log('NO BOOKINGS FOUND!');
-      console.log('Checking ALL bookings for this lead (any status)...');
+      console.log('NO BOOKINGS FOUND with Lead field!');
+      console.log('Trying alternative search methods...');
       
-      // Debug: Search for ANY booking for this lead
-      const allBookings = await base('Bookings')
+      // Try searching by Status only (to see if ANY bookings exist)
+      const statusOnly = await base('Bookings')
         .select({
-          filterByFormula: `SEARCH("${leadId}", ARRAYJOIN({Lead}))`,
-          maxRecords: 10
+          filterByFormula: `{Status} = "Scheduled"`,
+          maxRecords: 10,
+          sort: [{ field: 'StartDateTime', direction: 'desc' }]
         })
         .all();
       
-      console.log('All bookings (any status):', allBookings.length);
-      if (allBookings.length > 0) {
-        allBookings.forEach((b, i) => {
+      console.log('All Scheduled bookings:', statusOnly.length);
+      if (statusOnly.length > 0) {
+        statusOnly.forEach((b, i) => {
+          const leadField = b.get('Lead');
           console.log(`  Booking ${i+1}:`, {
             id: b.id,
             status: b.get('Status'),
-            lead: b.get('Lead'),
-            property: b.get('Property')
+            leadField: leadField,
+            leadFieldType: typeof leadField,
+            leadFieldArray: Array.isArray(leadField),
+            startTime: b.get('StartDateTime')
           });
         });
       }
