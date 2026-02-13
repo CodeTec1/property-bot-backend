@@ -422,7 +422,7 @@ app.post('/api/available-slots-v2', async (req, res) => {
     
     console.log('Generating slots...');
     let daysChecked = 0;
-    let slotsSkipped = { past: 0, weekend: 0, overlap: 0 };
+    let slotsSkipped = { past: 0, weekend: 0, overlap: 0, endTimeIssue: 0 };
     
     // Loop through days
     for (let dayOffset = 0; dayOffset < daysAhead && freeSlots.length < MAX_SLOTS_TO_RETURN; dayOffset++) {
@@ -432,13 +432,19 @@ app.post('/api/available-slots-v2', async (req, res) => {
       
       daysChecked++;
       
+      const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day.getDay()];
+      const dateStr = day.toLocaleDateString('en-KE');
+      
       // Check if working day
       if (!isWorkingDay(day)) {
+        console.log(`Day ${dayOffset + 1} (${dayName} ${dateStr}): SKIPPED - not a working day`);
         slotsSkipped.weekend++;
         continue;
       }
       
-      const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day.getDay()];
+      console.log(`Day ${dayOffset + 1} (${dayName} ${dateStr}): Checking slots ${workStart}:00 - ${workEnd}:00...`);
+      
+      let daySlots = 0;
       
       // Generate hourly slots for this day
       for (let hour = workStart; hour < workEnd && freeSlots.length < MAX_SLOTS_TO_RETURN; hour++) {
@@ -448,24 +454,34 @@ app.post('/api/available-slots-v2', async (req, res) => {
         const slotEnd = new Date(slotStart);
         slotEnd.setMinutes(slotEnd.getMinutes() + slotDuration);
         
+        const slotStartStr = slotStart.toLocaleString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
+        const slotEndStr = slotEnd.toLocaleString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
+        
         // Skip if slot is in the past
         if (slotStart <= minSlotTime) {
+          console.log(`  ${slotStartStr}: SKIPPED - in the past (before ${minSlotTime.toLocaleString('en-KE', { timeZone: timezone })})`);
           slotsSkipped.past++;
           continue;
         }
         
         // Skip if slot end goes beyond work hours
         if (slotEnd.getHours() > workEnd || (slotEnd.getHours() === workEnd && slotEnd.getMinutes() > 0)) {
+          console.log(`  ${slotStartStr}: SKIPPED - end time ${slotEndStr} goes beyond work end ${workEnd}:00`);
+          slotsSkipped.endTimeIssue++;
           continue;
         }
         
         // Skip if overlaps with booked event
         if (overlaps(slotStart, slotEnd)) {
+          console.log(`  ${slotStartStr}: SKIPPED - overlaps with existing booking`);
           slotsSkipped.overlap++;
           continue;
         }
         
         // This slot is free!
+        console.log(`  ${slotStartStr} - ${slotEndStr}: ✅ FREE SLOT!`);
+        daySlots++;
+        
         freeSlots.push({
           number: freeSlots.length + 1,
           start: slotStart.toISOString(),
@@ -484,20 +500,38 @@ app.post('/api/available-slots-v2', async (req, res) => {
           })
         });
       }
+      
+      console.log(`  Day summary: Found ${daySlots} free slots`);
+      
+      if (freeSlots.length >= MAX_SLOTS_TO_RETURN) {
+        console.log(`  Stopping - reached ${MAX_SLOTS_TO_RETURN} slots`);
+        break;
+      }
     }
     
-    console.log('Slot generation summary:');
+    console.log('========================================');
+    console.log('SLOT GENERATION SUMMARY:');
     console.log('  Days checked:', daysChecked);
-    console.log('  Skipped (past):', slotsSkipped.past);
-    console.log('  Skipped (weekend):', slotsSkipped.weekend);
-    console.log('  Skipped (overlap):', slotsSkipped.overlap);
-    console.log('  FREE SLOTS FOUND:', freeSlots.length);
+    console.log('  Slots skipped (past time):', slotsSkipped.past);
+    console.log('  Slots skipped (weekend/non-working):', slotsSkipped.weekend);
+    console.log('  Slots skipped (end time beyond work hours):', slotsSkipped.endTimeIssue);
+    console.log('  Slots skipped (overlapping with bookings):', slotsSkipped.overlap);
+    console.log('  ');
+    console.log('  ✅ FREE SLOTS FOUND:', freeSlots.length);
+    console.log('========================================');
     
     if (freeSlots.length > 0) {
       console.log('Free slots to return:');
       freeSlots.forEach(s => {
         console.log(`  ${s.number}. ${s.displayDate}, ${s.displayTime}`);
       });
+    } else {
+      console.log('⚠️  NO SLOTS FOUND!');
+      console.log('Possible reasons:');
+      console.log('  - All slots are in the past?');
+      console.log('  - Working days config issue?');
+      console.log('  - Work hours too narrow?');
+      console.log('  - All slots booked?');
     }
     
     // 6. CREATE SLOT MAP
