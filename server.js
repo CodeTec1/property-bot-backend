@@ -635,12 +635,25 @@ app.post('/api/create-booking', async (req, res) => {
     const propertyRecord = await base('Properties').find(propertyId);
     const propertyName = propertyRecord.get('Property Name');
     const propertyAddress = propertyRecord.get('Address');
-    const agentEmail = propertyRecord.get('Agent Email');
-    const agentPhone = propertyRecord.get('Agent Phone');
-    const agentName = propertyRecord.get('Agent Name');
+    const agentEmailRaw = propertyRecord.get('Agent Email');
+    const agentPhoneRaw = propertyRecord.get('Agent Phone');
+    const agentNameRaw = propertyRecord.get('Agent Name');
     
     console.log('Property:', propertyName);
-    console.log('Agent:', agentName);
+    console.log('Agent data (raw):');
+    console.log('  Name:', agentNameRaw, '(type:', typeof agentNameRaw, ')');
+    console.log('  Phone:', agentPhoneRaw, '(type:', typeof agentPhoneRaw, ')');
+    console.log('  Email:', agentEmailRaw, '(type:', typeof agentEmailRaw, ')');
+    
+    // Handle lookups (they return arrays)
+    const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
+    const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
+    const agentEmail = Array.isArray(agentEmailRaw) ? agentEmailRaw[0] : agentEmailRaw;
+    
+    console.log('Agent data (cleaned):');
+    console.log('  Name:', agentName);
+    console.log('  Phone:', agentPhone);
+    console.log('  Email:', agentEmail);
     
     // 5. CREATE GOOGLE CALENDAR EVENT
     console.log('Creating calendar event...');
@@ -693,12 +706,18 @@ app.post('/api/create-booking', async (req, res) => {
       'EndDateTime': slotEnd.toISOString(),
       'Date': slotStart.toISOString().split('T')[0], // ISO format: 2026-02-13
       'Time': slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }),
-      'Agent Name': agentName,
-      'Agent Phone': agentPhone,
       'Status': 'Scheduled',
       'Google Event ID': calendarEvent.data.id,
       'Tenant': [tenantId]
     };
+    
+    // Add agent fields only if they exist (they might be empty)
+    if (agentName) {
+      bookingData['Agent Name'] = agentName.toString(); // Ensure it's a string
+    }
+    if (agentPhone) {
+      bookingData['Agent Phone'] = agentPhone.toString(); // Ensure it's a string
+    }
     
     console.log('Booking data:', JSON.stringify(bookingData, null, 2));
     
