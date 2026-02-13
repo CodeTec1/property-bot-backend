@@ -682,14 +682,6 @@ const event = {
     dateTime: slotEnd.toISOString(),
     timeZone: timezone
   },
-  // REMOVED: attendees (service accounts can't invite attendees)
-  reminders: {
-    useDefault: false,
-    overrides: [
-      { method: 'email', minutes: 24 * 60 }, // 24h before
-      { method: 'popup', minutes: 60 }        // 1h before
-    ]
-  }
 };
 
 let calendarEvent;
@@ -760,11 +752,10 @@ try {
       : `${slotDurationMinutes} minutes`;
     
     const confirmMessage = `✅ *VIEWING CONFIRMED!*\n\n` +
-      `📋 *Booking Details:*\n` +
+      `*Booking Details:*\n` +
       `🏠 Property: ${propertyName}\n` +
       `📅 Date: ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric' })}\n` +
       `⏰ Time: ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
-      `⏱️ Duration: ${durationText}\n` +
       `📍 *Location:* ${propertyAddress}\n\n` +
       (agentName ? `👤 *Agent:* ${agentName}\n` : '') +
       (agentPhone ? `📱 *Agent Phone:* ${agentPhone}\n\n` : '\n') +
@@ -826,17 +817,18 @@ app.post('/api/cancel-booking', async (req, res) => {
       return res.status(400).json({ success: false, error: 'leadId and calendarId required' });
     }
     
-    // Search for active booking - FIX: Use direct array comparison
+    // Search for active booking - FIXED: Properly check array field
     console.log('Searching for bookings...');
     
     const bookings = await base('Bookings')
       .select({
-        filterByFormula: `AND({Status} = "Scheduled", {Lead} = "${leadId}")`,
+        filterByFormula: `AND({Status} = "Scheduled", FIND("${leadId}", ARRAYJOIN({Lead}, ",")))`,
         maxRecords: 1,
         sort: [{ field: 'StartDateTime', direction: 'desc' }]
       })
       .all();
     
+    console.log('Search formula:', `AND({Status} = "Scheduled", FIND("${leadId}", ARRAYJOIN({Lead}, ",")))`);
     console.log('Bookings found:', bookings.length);
     
     if (bookings.length === 0) {
