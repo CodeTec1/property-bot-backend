@@ -39,11 +39,6 @@ function cacheTenant(tenantId, data) {
   };
 }
 
-function toNairobiDate(date) {
-  return new Date(new Date(date).toLocaleString("en-US", { timeZone: "Africa/Nairobi" }));
-}
-
-
 // ============================================
 // Health Check
 // ============================================
@@ -314,190 +309,485 @@ app.post('/api/search-properties', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 5: Get Available Slots (Multi-Tenant) WITH DEBUG
+// ENDPOINT 5: Get Available Slots - PRODUCTION VERSION
 // ============================================
-
 app.post('/api/available-slots-v2', async (req, res) => {
   try {
-    const { 
-      propertyId, 
-      calendarId,
-      workStart,
-      workEnd,
-      daysAhead,
-      workingDays,
-      slotDuration = 60
-    } = req.body;
-
-    if (!propertyId || !calendarId) {
-      return res.status(400).json({ success:false, error:'Missing propertyId or calendarId' });
+    const { propertyId, leadId, tenantId } = req.body;
+    
+    console.log('========================================');
+    console.log('SLOT CALCULATION REQUEST:');
+    console.log('propertyId:', propertyId);
+    console.log('tenantId:', tenantId);
+    
+    // Validate inputs
+    if (!propertyId || !tenantId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'propertyId and tenantId are required' 
+      });
     }
-
+    
+    // 1. GET TENANT CONFIGURATION
+    console.log('Fetching tenant config...');
+    const tenant = await base('Tenants').find(tenantId);
+    
+    const calendarId = tenant.get('Google Calendar ID');
+    const workStart = parseInt(tenant.get('Work Start Hour') || 9);
+    const workEnd = parseInt(tenant.get('Work End Hour') || 17);
+    const slotDuration = parseInt(tenant.get('Slot Duration') || 60); // minutes
+    const workingDaysStr = tenant.get('Working Days') || "Monday, Tuesday, Wednesday, Thursday, Friday";
+    const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
+    const daysAhead = parseInt(tenant.get('Days Ahead') || 30);
+    
+    console.log('Tenant Config:');
+    console.log('  Calendar ID:', calendarId);
+    console.log('  Work hours:', workStart, '-', workEnd);
+    console.log('  Slot duration:', slotDuration, 'minutes');
+    console.log('  Working days:', workingDaysStr);
+    console.log('  Timezone:', timezone);
+    console.log('  Days ahead:', daysAhead);
+    
+    if (!calendarId) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Tenant does not have a Google Calendar configured' 
+      });
+    }
+    
+    // 2. GET PROPERTY DETAILS
     const propertyRecord = await base('Properties').find(propertyId);
-
-    const workStartHour = workStart ? toNairobiDate(workStart).getHours() : 9;
-    const workEndHour   = workEnd   ? toNairobiDate(workEnd).getHours()   : 17;
-
-    const workingDaysArray = workingDays
-      ? workingDays.split(',').map(d => d.trim().slice(0,3).toLowerCase())
-      : ['mon','tue','wed','thu','fri'];
-
-    const now = toNairobiDate(new Date());
-    const searchEnd = new Date(now);
-    searchEnd.setDate(searchEnd.getDate() + Number(daysAhead || 7));
-
-    // ---- Google bookings
+    const propertyName = propertyRecord.get('Property Name');
+    console.log('Property:', propertyName);
+    
+    // 3. GET CURRENT TIME IN TENANT'S TIMEZONE
+    const now = new Date();
+    const nowInTenantTZ = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+    
+    console.log('Current UTC time:', now.toISOString());
+    console.log('Current tenant time:', nowInTenantTZ.toLocaleString('en-KE'));
+    
+    // 4. SEARCH ALL BOOKED EVENTS FOR THIS PROPERTY
+    const searchEnd = new Date(nowInTenantTZ);
+    searchEnd.setDate(searchEnd.getDate() + daysAhead);
+    
+    console.log('Searching calendar from:', nowInTenantTZ.toISOString());
+    console.log('Searching calendar to:', searchEnd.toISOString());
+    
     const calendarResponse = await calendar.events.list({
-      calendarId,
-      timeMin: now.toISOString(),
+      calendarId: calendarId,
+      timeMin: nowInTenantTZ.toISOString(),
       timeMax: searchEnd.toISOString(),
+      q: propertyId, // Search for property ID in event
       singleEvents: true,
       orderBy: 'startTime'
     });
-
-    const googleBooked = (calendarResponse.data.items || []).map(e => ({
-      start: toNairobiDate(e.start.dateTime || e.start.date),
-      end:   toNairobiDate(e.end.dateTime   || e.end.date)
+    
+    const bookedEvents = calendarResponse.data.items || [];
+    console.log('Booked events found in calendar:', bookedEvents.length);
+    
+    if (bookedEvents.length > 0) {
+      console.log('Booked slots:');
+      bookedEvents.forEach((e, i) => {
+        const start = new Date(e.start.dateTime || e.start.date);
+        console.log(`  ${i+1}. ${start.toLocaleString('en-KE', { timeZone: timezone })}`);
+      });
+    }
+    
+    // Convert booked events to date objects
+    const booked = bookedEvents.map(event => ({
+      start: new Date(event.start.dateTime || event.start.date),
+      end: new Date(event.end.dateTime || event.end.date)
     }));
-
-    // ---- Airtable bookings
-    const airtableRows = await base('Bookings').select({
-      filterByFormula: `AND({PropertyUID}='${propertyId}', {Status}='Scheduled')`
-    }).all();
-
-    const airtableBooked = airtableRows.map(b => ({
-      start: toNairobiDate(b.get('StartDateTime')),
-      end:   toNairobiDate(b.get('EndDateTime'))
-    }));
-
-    const booked = [...googleBooked, ...airtableBooked];
-
-    const overlaps = (s,e) => booked.some(b => s < b.end && e > b.start);
-
+    
+    // 5. GENERATE CANDIDATE SLOTS
+    const minSlotTime = new Date(nowInTenantTZ.getTime() + (60 * 60 * 1000)); // 1 hour buffer
+    console.log('Minimum slot time (1hr buffer):', minSlotTime.toLocaleString('en-KE'));
+    
     const freeSlots = [];
-    const dayNameMap = ['sun','mon','tue','wed','thu','fri','sat'];
-
-    for (let i = 0; i < 30 && freeSlots.length < 5; i++) {
-      const day = new Date(now);
-      day.setDate(day.getDate() + i);
-      day.setHours(0,0,0,0);
-
-      const dayAbbr = dayNameMap[day.getDay()];
-      if (!workingDaysArray.includes(dayAbbr)) continue;
-
-      for (let h = workStartHour; h < workEndHour; h += slotDuration/60) {
+    const MAX_SLOTS_TO_RETURN = 5;
+    
+    function overlaps(slotStart, slotEnd) {
+      return booked.some(b => {
+        // Overlap if: slotStart < b.end AND slotEnd > b.start
+        return slotStart < b.end && slotEnd > b.start;
+      });
+    }
+    
+    function isWorkingDay(d) {
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const dayName = dayNames[d.getDay()];
+      return workingDaysStr.includes(dayName);
+    }
+    
+    console.log('Generating slots...');
+    let daysChecked = 0;
+    let slotsSkipped = { past: 0, weekend: 0, overlap: 0 };
+    
+    // Loop through days
+    for (let dayOffset = 0; dayOffset < daysAhead && freeSlots.length < MAX_SLOTS_TO_RETURN; dayOffset++) {
+      const day = new Date(nowInTenantTZ);
+      day.setDate(day.getDate() + dayOffset);
+      day.setHours(0, 0, 0, 0);
+      
+      daysChecked++;
+      
+      // Check if working day
+      if (!isWorkingDay(day)) {
+        slotsSkipped.weekend++;
+        continue;
+      }
+      
+      const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day.getDay()];
+      
+      // Generate hourly slots for this day
+      for (let hour = workStart; hour < workEnd && freeSlots.length < MAX_SLOTS_TO_RETURN; hour++) {
         const slotStart = new Date(day);
-        slotStart.setHours(h,0,0,0);
-
+        slotStart.setHours(hour, 0, 0, 0);
+        
         const slotEnd = new Date(slotStart);
-        slotEnd.setMinutes(slotEnd.getMinutes() + Number(slotDuration));
-
-        if (slotStart <= now) continue;
-        if (overlaps(slotStart, slotEnd)) continue;
-
+        slotEnd.setMinutes(slotEnd.getMinutes() + slotDuration);
+        
+        // Skip if slot is in the past
+        if (slotStart <= minSlotTime) {
+          slotsSkipped.past++;
+          continue;
+        }
+        
+        // Skip if slot end goes beyond work hours
+        if (slotEnd.getHours() > workEnd || (slotEnd.getHours() === workEnd && slotEnd.getMinutes() > 0)) {
+          continue;
+        }
+        
+        // Skip if overlaps with booked event
+        if (overlaps(slotStart, slotEnd)) {
+          slotsSkipped.overlap++;
+          continue;
+        }
+        
+        // This slot is free!
         freeSlots.push({
           number: freeSlots.length + 1,
           start: slotStart.toISOString(),
           end: slotEnd.toISOString(),
-          displayDate: slotStart.toLocaleDateString('en-KE', { weekday:'short', month:'short', day:'numeric' }),
-          displayTime: slotStart.toLocaleTimeString('en-KE', { hour:'numeric', minute:'2-digit', hour12:true })
+          displayDate: slotStart.toLocaleDateString('en-KE', { 
+            timeZone: timezone,
+            weekday: 'short', 
+            month: 'short', 
+            day: 'numeric' 
+          }),
+          displayTime: slotStart.toLocaleTimeString('en-KE', { 
+            timeZone: timezone,
+            hour: 'numeric', 
+            minute: '2-digit',
+            hour12: true 
+          })
         });
       }
     }
-
+    
+    console.log('Slot generation summary:');
+    console.log('  Days checked:', daysChecked);
+    console.log('  Skipped (past):', slotsSkipped.past);
+    console.log('  Skipped (weekend):', slotsSkipped.weekend);
+    console.log('  Skipped (overlap):', slotsSkipped.overlap);
+    console.log('  FREE SLOTS FOUND:', freeSlots.length);
+    
+    if (freeSlots.length > 0) {
+      console.log('Free slots to return:');
+      freeSlots.forEach(s => {
+        console.log(`  ${s.number}. ${s.displayDate}, ${s.displayTime}`);
+      });
+    }
+    
+    // 6. CREATE SLOT MAP
     const slotMap = {};
-    freeSlots.forEach(s => slotMap[s.number] = `${s.start}|${s.end}`);
-
-    const message = `📅 Available viewings:\n\n` +
-      freeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
-      `\n\nReply with slot number.`;
-
+    freeSlots.forEach(slot => {
+      slotMap[slot.number] = `${slot.start}|${slot.end}`;
+    });
+    
+    // 7. FORMAT MESSAGE
+    const message = freeSlots.length > 0
+      ? `📅 Available viewings:\n\n` + 
+        freeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
+        `\n\nReply with slot number.`
+      : `Sorry, no available slots in the next ${daysAhead} days.\n\nOur agent will contact you!`;
+    
+    console.log('========================================');
+    
     res.json({
-      success:true,
+      success: true,
       slots: freeSlots,
       slotMap: JSON.stringify(slotMap),
+      message: message,
       count: freeSlots.length,
-      message
+      propertyName: propertyName
     });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success:false, error:err.message });
+    
+  } catch (error) {
+    console.error('ERROR in available-slots-v2:', error);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-
 // ============================================
-// ENDPOINT 6: Create Booking (Multi-Tenant) - COMPLETE VERSION
+// ENDPOINT 6: Create Booking - PRODUCTION VERSION
 // ============================================
 app.post('/api/create-booking', async (req, res) => {
   try {
-    const { leadId, propertyId, slotNumber, slotMap, leadName, leadPhone, calendarId } = req.body;
-
-    let slots = typeof slotMap === 'string' ? JSON.parse(slotMap) : slotMap;
-    const slotData = slots[slotNumber];
-    if (!slotData) return res.json({ success:false, error:'Invalid slot' });
-
-    const [startTime,endTime] = slotData.split('|');
-
-    const slotStart = toNairobiDate(startTime);
-    const slotEnd   = toNairobiDate(endTime);
-
-    const slotKey = `${propertyId}_${slotStart.toISOString()}`;
-
-    // ---- SlotKey protection
-    const clash = await base('Bookings').select({
-      filterByFormula: `AND({SlotKey}='${slotKey}', {Status}='Scheduled')`
-    }).firstPage();
-
-    if (clash.length) {
-      return res.json({ success:false, slotTaken:true, message:'Slot already taken.' });
+    const { 
+      leadId, 
+      propertyId, 
+      slotNumber, 
+      slotMap, 
+      leadName, 
+      leadPhone,
+      tenantId
+    } = req.body;
+    
+    console.log('========================================');
+    console.log('CREATE BOOKING REQUEST:');
+    console.log('Input data:', JSON.stringify(req.body, null, 2));
+    
+    // Validate
+    const missingFields = [];
+    if (!leadId) missingFields.push('leadId');
+    if (!propertyId) missingFields.push('propertyId');
+    if (!slotNumber) missingFields.push('slotNumber');
+    if (!slotMap) missingFields.push('slotMap');
+    if (!tenantId) missingFields.push('tenantId');
+    
+    if (missingFields.length > 0) {
+      console.log('ERROR: Missing fields:', missingFields.join(', '));
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required fields: ' + missingFields.join(', ')
+      });
     }
-
+    
+    // 1. GET TENANT CONFIG
+    console.log('Fetching tenant config...');
+    const tenant = await base('Tenants').find(tenantId);
+    
+    const calendarId = tenant.get('Google Calendar ID');
+    const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
+    const slotDuration = parseInt(tenant.get('Slot Duration') || 60);
+    const companyName = tenant.get('Company Name');
+    
+    console.log('Tenant:', companyName);
+    console.log('Calendar ID:', calendarId);
+    console.log('Timezone:', timezone);
+    
+    // 2. PARSE SLOT MAP
+    let slots = slotMap;
+    if (typeof slotMap === 'string') {
+      try {
+        slots = JSON.parse(slotMap);
+      } catch (err) {
+        return res.status(400).json({ success: false, error: 'Invalid slot map format' });
+      }
+    }
+    
+    const slotData = slots[slotNumber];
+    if (!slotData || !slotData.includes('|')) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Invalid slot number. Available: ' + Object.keys(slots).join(', ')
+      });
+    }
+    
+    const [startTime, endTime] = slotData.split('|');
+    const slotStart = new Date(startTime);
+    const slotEnd = new Date(endTime);
+    
+    console.log('Selected slot:');
+    console.log('  Start:', slotStart.toLocaleString('en-KE', { timeZone: timezone }));
+    console.log('  End:', slotEnd.toLocaleString('en-KE', { timeZone: timezone }));
+    
+    // 3. COLLISION DETECTION - Check if slot is still available
+    console.log('Checking for conflicts in database...');
+    
+    // Check Google Calendar
+    const calendarConflicts = await calendar.events.list({
+      calendarId: calendarId,
+      timeMin: slotStart.toISOString(),
+      timeMax: slotEnd.toISOString(),
+      q: propertyId,
+      singleEvents: true
+    });
+    
+    const calendarHasConflict = calendarConflicts.data.items && calendarConflicts.data.items.length > 0;
+    
+    // Also check Airtable Bookings table directly
+    const airtableConflicts = await base('Bookings')
+      .select({
+        filterByFormula: `AND(
+          SEARCH("${propertyId}", ARRAYJOIN({Property})),
+          {Status} != "Cancelled",
+          OR(
+            AND(
+              IS_BEFORE({StartDateTime}, "${slotEnd.toISOString()}"),
+              IS_AFTER({EndDateTime}, "${slotStart.toISOString()}")
+            )
+          )
+        )`,
+        maxRecords: 1
+      })
+      .all();
+    
+    const airtableHasConflict = airtableConflicts.length > 0;
+    
+    console.log('Calendar conflicts:', calendarHasConflict ? 'YES' : 'NO');
+    console.log('Airtable conflicts:', airtableHasConflict ? 'YES' : 'NO');
+    
+    if (calendarHasConflict || airtableHasConflict) {
+      console.log('SLOT TAKEN! Cannot book.');
+      return res.json({
+        success: false,
+        slotTaken: true,
+        message: "⚠️ Sorry, that time slot was just taken by another client!\n\nPlease select another time or reply HI to search again."
+      });
+    }
+    
+    console.log('Slot is FREE! Proceeding with booking...');
+    
+    // 4. GET PROPERTY DETAILS
     const propertyRecord = await base('Properties').find(propertyId);
     const propertyName = propertyRecord.get('Property Name');
     const propertyAddress = propertyRecord.get('Address');
     const agentEmail = propertyRecord.get('Agent Email');
     const agentPhone = propertyRecord.get('Agent Phone');
     const agentName = propertyRecord.get('Agent Name');
-
-    // ---- Calendar
-    const calendarEvent = await calendar.events.insert({
-      calendarId,
-      resource:{
-        summary:`Property Viewing - ${propertyName}`,
-        description:`Client: ${leadName}\nPhone: ${leadPhone}`,
-        location:propertyAddress,
-        start:{ dateTime:slotStart.toISOString(), timeZone:'Africa/Nairobi' },
-        end:{ dateTime:slotEnd.toISOString(), timeZone:'Africa/Nairobi' },
-        attendees: agentEmail ? [{email:agentEmail}] : []
+    
+    console.log('Property:', propertyName);
+    console.log('Agent:', agentName);
+    
+    // 5. CREATE GOOGLE CALENDAR EVENT
+    console.log('Creating calendar event...');
+    
+    const event = {
+      summary: `${companyName} - Property Viewing`,
+      description: `Property: ${propertyName}\nClient: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}`,
+      location: propertyAddress,
+      start: {
+        dateTime: slotStart.toISOString(),
+        timeZone: timezone
+      },
+      end: {
+        dateTime: slotEnd.toISOString(),
+        timeZone: timezone
+      },
+      attendees: agentEmail ? [{ email: agentEmail }] : [],
+      reminders: {
+        useDefault: false,
+        overrides: [
+          { method: 'email', minutes: 24 * 60 },
+          { method: 'popup', minutes: 60 }
+        ]
       }
-    });
-
-    // ---- Airtable
-    const bookingRecord = await base('Bookings').create({
-      'Lead':[leadId],
-      'Property':[propertyId],
+    };
+    
+    let calendarEvent;
+    try {
+      calendarEvent = await calendar.events.insert({
+        calendarId: calendarId,
+        resource: event,
+        sendUpdates: 'all'
+      });
+      console.log('Calendar event created:', calendarEvent.data.id);
+    } catch (calErr) {
+      console.error('Calendar creation failed:', calErr.message);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to create calendar event: ' + calErr.message 
+      });
+    }
+    
+    // 6. CREATE AIRTABLE BOOKING
+    console.log('Creating Airtable booking...');
+    
+    const bookingData = {
+      'Lead': [leadId],
+      'Property': [propertyId],
       'StartDateTime': slotStart.toISOString(),
       'EndDateTime': slotEnd.toISOString(),
-      'Date': slotStart.toLocaleDateString('en-KE'),
-      'Time': slotStart.toLocaleTimeString('en-KE'),
+      'Date': slotStart.toLocaleDateString('en-KE', { timeZone: timezone }),
+      'Time': slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }),
       'Agent Name': agentName,
       'Agent Phone': agentPhone,
-      'Status':'Scheduled',
-      'SlotKey': slotKey,
-      'Google Event ID': calendarEvent.data.id
-    });
-
+      'Status': 'Scheduled',
+      'Google Event ID': calendarEvent.data.id,
+      'Tenant': [tenantId]
+    };
+    
+    console.log('Booking data:', JSON.stringify(bookingData, null, 2));
+    
+    let bookingRecord;
+    try {
+      bookingRecord = await base('Bookings').create(bookingData);
+      console.log('Booking created:', bookingRecord.id);
+    } catch (airtableErr) {
+      console.error('Airtable booking failed:', airtableErr.message);
+      // Cleanup calendar event
+      try {
+        await calendar.events.delete({
+          calendarId: calendarId,
+          eventId: calendarEvent.data.id
+        });
+        console.log('Calendar event deleted (cleanup)');
+      } catch {}
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to create booking: ' + airtableErr.message 
+      });
+    }
+    
+    // 7. FORMAT MESSAGES
+    const confirmMessage = `✅ *Viewing Confirmed!*\n\n` +
+      `🏠 *Property:* ${propertyName}\n` +
+      `📅 *Date:* ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
+      `⏰ *Time:* ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
+      `📍 *Location:* ${propertyAddress}\n\n` +
+      `We'll send you a reminder. See you there! 🎉\n\n` +
+      `To cancel, reply *CANCEL*`;
+    
+    const agentMessage = `🔔 *NEW VIEWING SCHEDULED*\n\n` +
+      `📋 *CLIENT:*\n` +
+      `${leadName}\n` +
+      `${leadPhone}\n\n` +
+      `🏠 *PROPERTY:*\n` +
+      `${propertyName}\n` +
+      `${propertyAddress}\n\n` +
+      `📅 ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
+      `⏰ ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
+      `✅ Added to your calendar`;
+    
+    console.log('BOOKING SUCCESSFUL!');
+    console.log('========================================');
+    
     res.json({
-      success:true,
-      bookingId:bookingRecord.id,
-      message:`✅ Viewing confirmed for ${slotStart.toLocaleString('en-KE')}`
+      success: true,
+      slotTaken: false,
+      bookingId: bookingRecord.id,
+      eventId: calendarEvent.data.id,
+      message: confirmMessage,
+      agentMessage: agentMessage,
+      agentEmail: agentEmail,
+      agentPhone: agentPhone,
+      agentName: agentName,
+      slotDetails: {
+        date: slotStart.toLocaleDateString('en-KE', { timeZone: timezone }),
+        time: slotStart.toLocaleTimeString('en-KE', { timeZone: timezone }),
+        property: propertyName,
+        address: propertyAddress
+      }
     });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success:false, error:err.message });
+    
+  } catch (error) {
+    console.error('ERROR in create-booking:', error);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -570,8 +860,7 @@ app.post('/api/cancel-booking', async (req, res) => {
     const leadPhone = lead.get('Phone');
     
     // Get booking time
-    const scheduledTime = new Date(booking.get('StartDateTime'));
-
+    const scheduledTime = new Date(booking.get('Scheduled Time'));
     
     // Delete Google Calendar event
     try {
@@ -647,7 +936,6 @@ app.post('/api/cancel-booking', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 // ============================================
 // Start Server
