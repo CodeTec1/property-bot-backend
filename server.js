@@ -410,18 +410,25 @@ app.post('/api/available-slots-v2', async (req, res) => {
       const dayStr = day.toLocaleDateString('en-KE', { timeZone: timezone });
       console.log(`Checking ${dayStr}...`);
       
+      // Get timezone offset (Kenya is UTC+3)
+      const KENYA_OFFSET_HOURS = 3;
+      
       // Generate slots for this day
       for (let hour = workStart; hour < workEnd && freeSlots.length < MAX_SLOTS; ) {
-        // Create slot start time
+        // Create slot start - adjust for Kenya timezone
+        // If we want 9am in Kenya (UTC+3), that's 6am UTC
         const slotStart = new Date(day);
-        slotStart.setHours(hour, 0, 0, 0);
+        slotStart.setUTCHours(hour - KENYA_OFFSET_HOURS, 0, 0, 0);
         
-        // Create slot end time
+        // Create slot end
         const slotEnd = new Date(slotStart);
         slotEnd.setMinutes(slotEnd.getMinutes() + slotDuration);
         
+        // Display in Kenya time
         const startStr = slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
         const endStr = slotEnd.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
+        
+        console.log(`  ${hour}:00 Kenya → UTC ${slotStart.getUTCHours()}:00 → displays as ${startStr}`);
         
         // Skip if in the past
         if (slotStart <= minSlotTime) {
@@ -684,7 +691,7 @@ app.post('/api/create-booking', async (req, res) => {
       'Property': [propertyId],
       'StartDateTime': slotStart.toISOString(),
       'EndDateTime': slotEnd.toISOString(),
-      'Date': slotStart.toLocaleDateString('en-KE', { timeZone: timezone }),
+      'Date': slotStart.toISOString().split('T')[0], // ISO format: 2026-02-13
       'Time': slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }),
       'Agent Name': agentName,
       'Agent Phone': agentPhone,
