@@ -336,15 +336,51 @@ app.post('/api/available-slots-v2', async (req, res) => {
     const workStart = parseInt(tenant.get('Work Start Hour') || 9);
     const workEnd = parseInt(tenant.get('Work End Hour') || 17);
     const slotDuration = parseInt(tenant.get('Slot Duration') || 60); // minutes
-    const workingDaysStr = tenant.get('Working Days') || "Monday, Tuesday, Wednesday, Thursday, Friday";
+    const workingDaysRaw = tenant.get('Working Days') || "Monday, Tuesday, Wednesday, Thursday, Friday";
     const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
     const daysAhead = parseInt(tenant.get('Days Ahead') || 30);
+    
+    // Normalize working days to a string (handle both array and string)
+    let workingDaysStr;
+    if (Array.isArray(workingDaysRaw)) {
+      // Convert array ['Mon', 'Tue'] to string "Monday, Tuesday"
+      const dayMap = {
+        'Mon': 'Monday',
+        'Tue': 'Tuesday', 
+        'Wed': 'Wednesday',
+        'Thu': 'Thursday',
+        'Fri': 'Friday',
+        'Sat': 'Saturday',
+        'Sun': 'Sunday',
+        'Monday': 'Monday',
+        'Tuesday': 'Tuesday',
+        'Wednesday': 'Wednesday',
+        'Thursday': 'Thursday',
+        'Friday': 'Friday',
+        'Saturday': 'Saturday',
+        'Sunday': 'Sunday'
+      };
+      workingDaysStr = workingDaysRaw.map(d => dayMap[d] || d).join(', ');
+    } else {
+      // It's already a string
+      workingDaysStr = workingDaysRaw;
+      // But might have short names, expand them
+      workingDaysStr = workingDaysStr
+        .replace(/\bMon\b/g, 'Monday')
+        .replace(/\bTue\b/g, 'Tuesday')
+        .replace(/\bWed\b/g, 'Wednesday')
+        .replace(/\bThu\b/g, 'Thursday')
+        .replace(/\bFri\b/g, 'Friday')
+        .replace(/\bSat\b/g, 'Saturday')
+        .replace(/\bSun\b/g, 'Sunday');
+    }
     
     console.log('Tenant Config:');
     console.log('  Calendar ID:', calendarId);
     console.log('  Work hours:', workStart, '-', workEnd);
     console.log('  Slot duration:', slotDuration, 'minutes');
-    console.log('  Working days:', workingDaysStr);
+    console.log('  Working days (raw):', workingDaysRaw);
+    console.log('  Working days (normalized):', workingDaysStr);
     console.log('  Timezone:', timezone);
     console.log('  Days ahead:', daysAhead);
     
