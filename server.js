@@ -937,6 +937,209 @@ app.post('/api/cancel-booking', async (req, res) => {
 });
 
 // ============================================
+// ENDPOINT 8: Check and Send Reminders
+// ============================================
+app.post('/api/check-reminders', async (req, res) => {
+  try {
+    console.log('========================================');
+    console.log('CHECKING FOR REMINDERS...');
+    
+    const now = new Date();
+    console.log('Current time:', now.toISOString());
+    
+    // Calculate time windows
+    const in12Hours = new Date(now.getTime() + (12 * 60 * 60 * 1000));
+    const in11Hours = new Date(now.getTime() + (11 * 60 * 60 * 1000));
+    
+    const in1Hour = new Date(now.getTime() + (1 * 60 * 60 * 1000));
+    const in50Minutes = new Date(now.getTime() + (50 * 60 * 1000));
+    
+    console.log('12h window:', in11Hours.toISOString(), 'to', in12Hours.toISOString());
+    console.log('1h window:', in50Minutes.toISOString(), 'to', in1Hour.toISOString());
+    
+    const remindersToSend = [];
+    
+    // ===================================
+    // FIND 12-HOUR REMINDERS
+    // ===================================
+    console.log('Looking for 12-hour reminders...');
+    
+    const bookings12h = await base('Bookings')
+      .select({
+        filterByFormula: `AND(
+          {Status} = "Scheduled",
+          {Reminder12hSent} = FALSE(),
+          IS_AFTER({StartDateTime}, "${in11Hours.toISOString()}"),
+          IS_BEFORE({StartDateTime}, "${in12Hours.toISOString()}")
+        )`,
+        fields: ['Lead', 'Property', 'StartDateTime', 'Tenant']
+      })
+      .all();
+    
+    console.log('Found', bookings12h.length, '12-hour reminders');
+    
+    for (const booking of bookings12h) {
+      const leadId = booking.get('Lead')?.[0];
+      const propertyId = booking.get('Property')?.[0];
+      const tenantId = booking.get('Tenant')?.[0];
+      const startTime = new Date(booking.get('StartDateTime'));
+      
+      if (!leadId || !propertyId || !tenantId) {
+        console.log('Skipping booking', booking.id, '- missing data');
+        continue;
+      }
+      
+      // Get lead details
+      const lead = await base('Leads').find(leadId);
+      const leadPhone = lead.get('Phone');
+      const leadName = lead.get('Name');
+      
+      // Get property details
+      const property = await base('Properties').find(propertyId);
+      const propertyName = property.get('Property Name');
+      const propertyAddress = property.get('Address');
+      
+      // Get agent details
+      const agentNameRaw = property.get('Agent Name');
+      const agentPhoneRaw = property.get('Agent Phone');
+      const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
+      const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
+      
+      // Get tenant timezone
+      const tenant = await base('Tenants').find(tenantId);
+      const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
+      
+      // Format message
+      const message = `🔔 REMINDER: Viewing Tomorrow!\n\n` +
+        `🏠 ${propertyName}\n` +
+        `📅 ${startTime.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' })}\n` +
+        `⏰ ${startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
+        `📍 ${propertyAddress}\n\n` +
+        (agentName ? `👤 Agent: ${agentName}\n` : '') +
+        (agentPhone ? `📱 ${agentPhone}\n\n` : '\n') +
+        `See you there!`;
+      
+      remindersToSend.push({
+        type: '12h',
+        bookingId: booking.id,
+        leadPhone: leadPhone,
+        leadName: leadName,
+        message: message
+      });
+      
+      console.log('✓ 12h reminder for', leadName, '-', propertyName);
+    }
+    
+    // ===================================
+    // FIND 1-HOUR REMINDERS
+    // ===================================
+    console.log('Looking for 1-hour reminders...');
+    
+    const bookings1h = await base('Bookings')
+      .select({
+        filterByFormula: `AND(
+          {Status} = "Scheduled",
+          {Reminder1hSent} = FALSE(),
+          IS_AFTER({StartDateTime}, "${in50Minutes.toISOString()}"),
+          IS_BEFORE({StartDateTime}, "${in1Hour.toISOString()}")
+        )`,
+        fields: ['Lead', 'Property', 'StartDateTime', 'Tenant']
+      })
+      .all();
+    
+    console.log('Found', bookings1h.length, '1-hour reminders');
+    
+    for (const booking of bookings1h) {
+      const leadId = booking.get('Lead')?.[0];
+      const propertyId = booking.get('Property')?.[0];
+      const tenantId = booking.get('Tenant')?.[0];
+      
+      if (!leadId || !propertyId || !tenantId) {
+        console.log('Skipping booking', booking.id, '- missing data');
+        continue;
+      }
+      
+      // Get lead details
+      const lead = await base('Leads').find(leadId);
+      const leadPhone = lead.get('Phone');
+      const leadName = lead.get('Name');
+      
+      // Get property details
+      const property = await base('Properties').find(propertyId);
+      const propertyName = property.get('Property Name');
+      const propertyAddress = property.get('Address');
+      
+      // Format message
+      const message = `⏰ Your viewing starts in 1 HOUR!\n\n` +
+        `🏠 ${propertyName}\n` +
+        `📍 ${propertyAddress}\n\n` +
+        `The agent is ready for you! 🎉`;
+      
+      remindersToSend.push({
+        type: '1h',
+        bookingId: booking.id,
+        leadPhone: leadPhone,
+        leadName: leadName,
+        message: message
+      });
+      
+      console.log('✓ 1h reminder for', leadName, '-', propertyName);
+    }
+    
+    // ===================================
+    // RETURN RESULTS
+    // ===================================
+    console.log('Total reminders to send:', remindersToSend.length);
+    console.log('========================================');
+    
+    res.json({
+      success: true,
+      reminders: remindersToSend,
+      count: remindersToSend.length
+    });
+    
+  } catch (error) {
+    console.error('ERROR in check-reminders:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
+// ENDPOINT 9: Mark Reminder as Sent
+// ============================================
+app.post('/api/mark-reminder-sent', async (req, res) => {
+  try {
+    const { bookingId, reminderType } = req.body;
+    
+    console.log('Marking reminder as sent:', bookingId, reminderType);
+    
+    if (!bookingId || !reminderType) {
+      return res.status(400).json({ success: false, error: 'bookingId and reminderType required' });
+    }
+    
+    const updateData = {};
+    
+    if (reminderType === '12h') {
+      updateData['Reminder12hSent'] = true;
+    } else if (reminderType === '1h') {
+      updateData['Reminder1hSent'] = true;
+    } else {
+      return res.status(400).json({ success: false, error: 'Invalid reminderType' });
+    }
+    
+    await base('Bookings').update(bookingId, updateData);
+    
+    console.log('✓ Marked as sent');
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('ERROR in mark-reminder-sent:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
 // Start Server
 // ============================================
 const PORT = process.env.PORT || 3000;
