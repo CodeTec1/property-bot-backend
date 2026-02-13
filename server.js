@@ -809,7 +809,7 @@ app.post('/api/create-booking', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 7: Cancel Booking (Multi-Tenant) WITH DEBUG
+// ENDPOINT 7: Cancel Booking - FIXED
 // ============================================
 app.post('/api/cancel-booking', async (req, res) => {
   try {
@@ -820,56 +820,25 @@ app.post('/api/cancel-booking', async (req, res) => {
     console.log('leadId:', leadId);
     console.log('calendarId:', calendarId);
     
-    // Validate
-    if (!leadId) {
-      return res.status(400).json({ success: false, error: 'Lead ID is required' });
-    }
-    if (!calendarId) {
-      return res.status(400).json({ success: false, error: 'Calendar ID is required' });
+    if (!leadId || !calendarId) {
+      return res.status(400).json({ success: false, error: 'leadId and calendarId required' });
     }
     
-    // Search for active booking for this lead
+    // Search for active booking - FIX: Use direct array comparison
     console.log('Searching for bookings...');
-    const searchFormula = `AND(SEARCH("${leadId}", ARRAYJOIN({Lead})), {Status} = "Scheduled")`;
-    console.log('Filter formula:', searchFormula);
     
     const bookings = await base('Bookings')
       .select({
-        filterByFormula: searchFormula,
-        maxRecords: 10
+        filterByFormula: `AND({Status} = "Scheduled", {Lead} = "${leadId}")`,
+        maxRecords: 1,
+        sort: [{ field: 'StartDateTime', direction: 'desc' }]
       })
       .all();
     
     console.log('Bookings found:', bookings.length);
     
     if (bookings.length === 0) {
-      console.log('NO BOOKINGS FOUND with Lead field!');
-      console.log('Trying alternative search methods...');
-      
-      // Try searching by Status only (to see if ANY bookings exist)
-      const statusOnly = await base('Bookings')
-        .select({
-          filterByFormula: `{Status} = "Scheduled"`,
-          maxRecords: 10,
-          sort: [{ field: 'StartDateTime', direction: 'desc' }]
-        })
-        .all();
-      
-      console.log('All Scheduled bookings:', statusOnly.length);
-      if (statusOnly.length > 0) {
-        statusOnly.forEach((b, i) => {
-          const leadField = b.get('Lead');
-          console.log(`  Booking ${i+1}:`, {
-            id: b.id,
-            status: b.get('Status'),
-            leadField: leadField,
-            leadFieldType: typeof leadField,
-            leadFieldArray: Array.isArray(leadField),
-            startTime: b.get('StartDateTime')
-          });
-        });
-      }
-      
+      console.log('NO BOOKINGS FOUND!');
       return res.json({
         success: false,
         noBooking: true,
@@ -877,14 +846,14 @@ app.post('/api/cancel-booking', async (req, res) => {
       });
     }
     
-    console.log('Found active booking:', bookings[0].id);
-    
     const booking = bookings[0];
-    const eventId = booking.get('Google Event ID');
-    const propertyId = booking.get('Property')[0];
+    console.log('Found booking:', booking.id);
     
-    // Check if Google event exists
+    const eventId = booking.get('Google Event ID');
+    const propertyId = booking.get('Property')?.[0];
+    
     if (!eventId) {
+      console.log('No Google Event ID found');
       return res.json({
         success: false,
         noEvent: true,
@@ -892,20 +861,27 @@ app.post('/api/cancel-booking', async (req, res) => {
       });
     }
     
-    // Get property details
+    // Get property and lead details
     const property = await base('Properties').find(propertyId);
     const propertyName = property.get('Property Name');
-    const agentEmail = property.get('Agent Email');
-    const agentPhone = property.get('Agent Phone');
-    const agentName = property.get('Agent Name');
     
-    // Get lead details
     const lead = await base('Leads').find(leadId);
     const leadName = lead.get('Name');
     const leadPhone = lead.get('Phone');
     
-    // Get booking time
-    const scheduledTime = new Date(booking.get('Scheduled Time'));
+    const scheduledTime = new Date(booking.get('StartDateTime'));
+    
+    // Get agent details (with correct field names)
+    const agentNameRaw = property.get('Agent Name');
+    const agentPhoneRaw = property.get('Agent Phone');
+    const agentEmailRaw = property.get('Agent Email');
+    
+    // Handle arrays from lookups
+    const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
+    const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
+    const agentEmail = Array.isArray(agentEmailRaw) ? agentEmailRaw[0] : agentEmailRaw;
+    
+    console.log('Agent:', agentName, agentPhone, agentEmail);
     
     // Delete Google Calendar event
     try {
@@ -913,12 +889,12 @@ app.post('/api/cancel-booking', async (req, res) => {
         calendarId: calendarId,
         eventId: eventId
       });
+      console.log('Calendar event deleted');
     } catch (calErr) {
-      console.error('Calendar deletion error:', calErr);
-      // Continue anyway - update Airtable even if calendar fails
+      console.error('Calendar deletion error:', calErr.message);
     }
     
-    // Update booking status in Airtable
+    // Update booking status
     await base('Bookings').update(booking.id, {
       'Status': 'Cancelled'
     });
@@ -929,36 +905,21 @@ app.post('/api/cancel-booking', async (req, res) => {
       'Status': 'Cancelled'
     });
     
-    // Format messages
     const userMessage = `❌ *Viewing Cancelled*\n\n` +
       `Your viewing has been cancelled:\n\n` +
       `🏠 *Property:* ${propertyName}\n` +
-      `📅 *Was scheduled for:* ${scheduledTime.toLocaleDateString('en-KE', { 
-        weekday: 'long', 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric' 
-      })}\n` +
-      `⏰ *Time:* ${scheduledTime.toLocaleTimeString('en-KE', { 
-        hour: 'numeric', 
-        minute: '2-digit', 
-        hour12: true 
-      })}\n\n` +
+      `📅 *Was scheduled for:* ${scheduledTime.toLocaleDateString('en-KE')}\n` +
+      `⏰ *Time:* ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
       `If you'd like to reschedule, reply *HI* to start over.`;
     
     const agentMessage = `🔔 *BOOKING CANCELLATION*\n\n` +
       `A viewing has been cancelled.\n\n` +
-      `📋 *CLIENT DETAILS:*\n` +
-      `Name: ${leadName}\n` +
-      `Phone: ${leadPhone}\n\n` +
-      `🏠 *PROPERTY:*\n` +
-      `${propertyName}\n\n` +
-      `📅 *Was scheduled for:*\n` +
-      `${scheduledTime.toLocaleDateString('en-KE')} at ${scheduledTime.toLocaleTimeString('en-KE', { 
-        hour: 'numeric', 
-        minute: '2-digit' 
-      })}\n\n` +
-      `⏰ Cancelled at: ${new Date().toLocaleString('en-KE')}`;
+      `📋 *CLIENT:*\n${leadName}\n${leadPhone}\n\n` +
+      `🏠 *PROPERTY:* ${propertyName}\n\n` +
+      `📅 *Was scheduled for:* ${scheduledTime.toLocaleDateString('en-KE')} at ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit' })}`;
+    
+    console.log('Cancellation successful');
+    console.log('========================================');
     
     res.json({
       success: true,
@@ -966,18 +927,11 @@ app.post('/api/cancel-booking', async (req, res) => {
       agentMessage: agentMessage,
       agentPhone: agentPhone,
       agentEmail: agentEmail,
-      agentName: agentName,
-      bookingDetails: {
-        propertyName: propertyName,
-        scheduledDate: scheduledTime.toLocaleDateString('en-KE'),
-        scheduledTime: scheduledTime.toLocaleTimeString('en-KE'),
-        leadName: leadName,
-        leadPhone: leadPhone
-      }
+      agentName: agentName
     });
     
   } catch (error) {
-    console.error('Error in cancel-booking:', error);
+    console.error('ERROR in cancel-booking:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
