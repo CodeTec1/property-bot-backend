@@ -1141,6 +1141,194 @@ app.post('/api/mark-reminder-sent', async (req, res) => {
 });
 
 // ============================================
+// ENDPOINT 10: Check and Send Follow-Ups
+// ============================================
+app.post('/api/check-followups', async (req, res) => {
+  try {
+    console.log('========================================');
+    console.log('CHECKING FOR FOLLOW-UPS...');
+    
+    const now = new Date();
+    console.log('Current time:', now.toISOString());
+    
+    // Calculate 3-hour window (2.5h to 3.5h after viewing)
+    const twoHalfHoursAgo = new Date(now.getTime() - (2.5 * 60 * 60 * 1000));
+    const threeHalfHoursAgo = new Date(now.getTime() - (3.5 * 60 * 60 * 1000));
+    
+    console.log('Looking for viewings between:', threeHalfHoursAgo.toISOString(), 'and', twoHalfHoursAgo.toISOString());
+    
+    const followUpsToSend = [];
+    
+    // Find bookings that ended 3 hours ago and haven't been followed up
+    const bookings = await base('Bookings')
+      .select({
+        filterByFormula: `AND(
+          {Status} = "Scheduled",
+          {FollowUpSent} = FALSE(),
+          IS_AFTER({EndDateTime}, "${threeHalfHoursAgo.toISOString()}"),
+          IS_BEFORE({EndDateTime}, "${twoHalfHoursAgo.toISOString()}")
+        )`,
+        fields: ['Lead', 'Property', 'EndDateTime', 'Tenant']
+      })
+      .all();
+    
+    console.log('Found', bookings.length, 'follow-ups to send');
+    
+    for (const booking of bookings) {
+      const leadId = booking.get('Lead')?.[0];
+      const propertyId = booking.get('Property')?.[0];
+      const tenantId = booking.get('Tenant')?.[0];
+      
+      if (!leadId || !propertyId || !tenantId) {
+        console.log('Skipping booking', booking.id, '- missing data');
+        continue;
+      }
+      
+      // Get lead details
+      const lead = await base('Leads').find(leadId);
+      const leadPhone = lead.get('Phone');
+      const leadName = lead.get('Name');
+      
+      // Get property details
+      const property = await base('Properties').find(propertyId);
+      const propertyName = property.get('Property Name');
+      
+      // Get tenant details
+      const tenant = await base('Tenants').find(tenantId);
+      const tenantWhatsApp = tenant.get('WhatsApp Number');
+      
+      // Format message
+      const message = `Hi ${leadName} 👋\n\n` +
+        `How was your viewing of ${propertyName}?\n\n` +
+        `Reply:\n` +
+        `1️⃣ Interested\n` +
+        `2️⃣ Not Interested\n` +
+        `3️⃣ HI – to search another property\n\n` +
+        `We're here to help! 🏡`;
+      
+      followUpsToSend.push({
+        bookingId: booking.id,
+        leadId: leadId,
+        leadPhone: leadPhone,
+        leadName: leadName,
+        propertyName: propertyName,
+        tenantWhatsApp: tenantWhatsApp,
+        message: message
+      });
+      
+      console.log('✓ Follow-up for', leadName, '-', propertyName);
+    }
+    
+    console.log('Total follow-ups to send:', followUpsToSend.length);
+    console.log('========================================');
+    
+    res.json({
+      success: true,
+      followUps: followUpsToSend,
+      count: followUpsToSend.length
+    });
+    
+  } catch (error) {
+    console.error('ERROR in check-followups:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
+// ENDPOINT 11: Mark Follow-Up as Sent
+// ============================================
+app.post('/api/mark-followup-sent', async (req, res) => {
+  try {
+    const { bookingId } = req.body;
+    
+    console.log('Marking follow-up as sent:', bookingId);
+    
+    if (!bookingId) {
+      return res.status(400).json({ success: false, error: 'bookingId required' });
+    }
+    
+    await base('Bookings').update(bookingId, {
+      'FollowUpSent': true
+    });
+    
+    console.log('✓ Marked as sent');
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('ERROR in mark-followup-sent:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
+// ENDPOINT 12: Handle Follow-Up Response
+// ============================================
+app.post('/api/handle-followup-response', async (req, res) => {
+  try {
+    const { leadId, response } = req.body;
+    
+    console.log('Follow-up response:', leadId, response);
+    
+    if (!leadId || !response) {
+      return res.status(400).json({ success: false, error: 'leadId and response required' });
+    }
+    
+    const lead = await base('Leads').find(leadId);
+    const leadName = lead.get('Name');
+    
+    if (response === '1' || response.toLowerCase().includes('interested')) {
+      // Mark as interested
+      await base('Leads').update(leadId, {
+        'Status': 'Hot Lead',
+        'Conversation Stage': 'interested_after_viewing'
+      });
+      
+      const userMessage = `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`;
+      
+      const agentMessage = `🔥 *HOT LEAD ALERT!*\n\n` +
+        `${leadName} is INTERESTED after viewing!\n\n` +
+        `📞 Contact them ASAP: ${lead.get('Phone')}\n\n` +
+        `Strike while the iron is hot! 🎯`;
+      
+      res.json({
+        success: true,
+        userMessage: userMessage,
+        agentMessage: agentMessage,
+        notifyAgent: true
+      });
+      
+    } else if (response === '2' || response.toLowerCase().includes('not interested')) {
+      // Mark as not interested
+      await base('Leads').update(leadId, {
+        'Status': 'Not Interested',
+        'Conversation Stage': 'not_interested_after_viewing'
+      });
+      
+      const userMessage = `Thank you for your feedback! 🙏\n\nIf you change your mind, just reply HI anytime.\n\nWe're always here to help! 🏡`;
+      
+      res.json({
+        success: true,
+        userMessage: userMessage,
+        notifyAgent: false
+      });
+      
+    } else {
+      // Invalid response
+      res.json({
+        success: false,
+        invalidResponse: true,
+        userMessage: `Please reply:\n1️⃣ Interested\n2️⃣ Not Interested\n3️⃣ HI – to search another property`
+      });
+    }
+    
+  } catch (error) {
+    console.error('ERROR in handle-followup-response:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
 // Start Server
 // ============================================
 const PORT = process.env.PORT || 3000;
