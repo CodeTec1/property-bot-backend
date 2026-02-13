@@ -665,46 +665,48 @@ app.post('/api/create-booking', async (req, res) => {
     console.log('  Phone (cleaned):', agentPhone);
     console.log('  Email:', agentEmail);
     
-    // 5. CREATE GOOGLE CALENDAR EVENT
-    console.log('Creating calendar event...');
-    
-    const event = {
-      summary: `${companyName} - Property Viewing`,
-      description: `Property: ${propertyName}\nClient: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}`,
-      location: propertyAddress,
-      start: {
-        dateTime: slotStart.toISOString(),
-        timeZone: timezone
-      },
-      end: {
-        dateTime: slotEnd.toISOString(),
-        timeZone: timezone
-      },
-      attendees: agentEmail ? [{ email: agentEmail }] : [],
-      reminders: {
-        useDefault: false,
-        overrides: [
-          { method: 'email', minutes: 24 * 60 },
-          { method: 'popup', minutes: 60 }
-        ]
-      }
-    };
-    
-    let calendarEvent;
-    try {
-      calendarEvent = await calendar.events.insert({
-        calendarId: calendarId,
-        resource: event,
-        sendUpdates: 'all'
-      });
-      console.log('Calendar event created:', calendarEvent.data.id);
-    } catch (calErr) {
-      console.error('Calendar creation failed:', calErr.message);
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to create calendar event: ' + calErr.message 
-      });
-    }
+    // In the create booking endpoint, find this section and replace it:
+
+// 5. CREATE GOOGLE CALENDAR EVENT
+console.log('Creating calendar event...');
+
+const event = {
+  summary: `${companyName} - Property Viewing`,
+  description: `Property: ${propertyName}\nClient: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}\n\nAgent: ${agentName || 'N/A'}\nAgent Phone: ${agentPhone || 'N/A'}`,
+  location: propertyAddress,
+  start: {
+    dateTime: slotStart.toISOString(),
+    timeZone: timezone
+  },
+  end: {
+    dateTime: slotEnd.toISOString(),
+    timeZone: timezone
+  },
+  // REMOVED: attendees (service accounts can't invite attendees)
+  reminders: {
+    useDefault: false,
+    overrides: [
+      { method: 'email', minutes: 24 * 60 }, // 24h before
+      { method: 'popup', minutes: 60 }        // 1h before
+    ]
+  }
+};
+
+let calendarEvent;
+try {
+  calendarEvent = await calendar.events.insert({
+    calendarId: calendarId,
+    resource: event
+    // REMOVED: sendUpdates: 'all' (can't send updates without attendees)
+  });
+  console.log('Calendar event created:', calendarEvent.data.id);
+} catch (calErr) {
+  console.error('Calendar creation failed:', calErr.message);
+  return res.status(500).json({ 
+    success: false, 
+    error: 'Failed to create calendar event: ' + calErr.message 
+  });
+}
     
     // 6. CREATE AIRTABLE BOOKING
     console.log('Creating Airtable booking...');
