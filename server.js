@@ -647,12 +647,22 @@ app.post('/api/create-booking', async (req, res) => {
     
     // Handle lookups (they return arrays)
     const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
-    const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
+    const agentPhoneRaw2 = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
     const agentEmail = Array.isArray(agentEmailRaw) ? agentEmailRaw[0] : agentEmailRaw;
+    
+    // Clean phone number - Airtable phone fields are picky
+    let agentPhone = agentPhoneRaw2;
+    if (agentPhone) {
+      // Convert to string and trim
+      agentPhone = agentPhone.toString().trim();
+      // Remove any extra formatting that might cause issues
+      agentPhone = agentPhone.replace(/[^\d+\s()-]/g, '');
+    }
     
     console.log('Agent data (cleaned):');
     console.log('  Name:', agentName);
-    console.log('  Phone:', agentPhone);
+    console.log('  Phone (original):', agentPhoneRaw2);
+    console.log('  Phone (cleaned):', agentPhone);
     console.log('  Email:', agentEmail);
     
     // 5. CREATE GOOGLE CALENDAR EVENT
@@ -820,26 +830,50 @@ app.post('/api/cancel-booking', async (req, res) => {
     
     // Search for active booking for this lead
     console.log('Searching for bookings...');
-    console.log('Filter formula:', `AND(SEARCH("${leadId}", ARRAYJOIN({Lead})), {Status} != "Cancelled")`);
+    const searchFormula = `AND(SEARCH("${leadId}", ARRAYJOIN({Lead})), {Status} = "Scheduled")`;
+    console.log('Filter formula:', searchFormula);
     
     const bookings = await base('Bookings')
-  .select({
-    filterByFormula: `AND(FIND("${leadId}", ARRAYJOIN(RECORD_ID({Lead}))), {Status} != "Cancelled")`,
-    maxRecords: 1
-  })
-  .all();
-
+      .select({
+        filterByFormula: searchFormula,
+        maxRecords: 10 // Get more to see what's there
+      })
+      .all();
     
     console.log('Bookings found:', bookings.length);
     
     if (bookings.length === 0) {
       console.log('NO BOOKINGS FOUND!');
+      console.log('Checking ALL bookings for this lead (any status)...');
+      
+      // Debug: Search for ANY booking for this lead
+      const allBookings = await base('Bookings')
+        .select({
+          filterByFormula: `SEARCH("${leadId}", ARRAYJOIN({Lead}))`,
+          maxRecords: 10
+        })
+        .all();
+      
+      console.log('All bookings (any status):', allBookings.length);
+      if (allBookings.length > 0) {
+        allBookings.forEach((b, i) => {
+          console.log(`  Booking ${i+1}:`, {
+            id: b.id,
+            status: b.get('Status'),
+            lead: b.get('Lead'),
+            property: b.get('Property')
+          });
+        });
+      }
+      
       return res.json({
         success: false,
         noBooking: true,
         message: "You don't have any active bookings to cancel.\n\nReply HI to search for properties! 🏡"
       });
     }
+    
+    console.log('Found active booking:', bookings[0].id);
     
     const booking = bookings[0];
     const eventId = booking.get('Google Event ID');
