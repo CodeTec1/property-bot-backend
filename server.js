@@ -1005,9 +1005,10 @@ app.post('/api/check-reminders', async (req, res) => {
       const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
       const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
       
-      // Get tenant timezone
+      // Get tenant timezone and WhatsApp number
       const tenant = await base('Tenants').find(tenantId);
       const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
+      const tenantWhatsApp = tenant.get('WhatsApp Number');
       
       // Format message
       const message = `🔔 REMINDER: Viewing Tomorrow!\n\n` +
@@ -1024,6 +1025,7 @@ app.post('/api/check-reminders', async (req, res) => {
         bookingId: booking.id,
         leadPhone: leadPhone,
         leadName: leadName,
+        tenantWhatsApp: tenantWhatsApp, // ← ADDED THIS!
         message: message
       });
       
@@ -1069,6 +1071,10 @@ app.post('/api/check-reminders', async (req, res) => {
       const propertyName = property.get('Property Name');
       const propertyAddress = property.get('Address');
       
+      // Get tenant WhatsApp number
+      const tenant = await base('Tenants').find(tenantId);
+      const tenantWhatsApp = tenant.get('WhatsApp Number');
+      
       // Format message
       const message = `⏰ Your viewing starts in 1 HOUR!\n\n` +
         `🏠 ${propertyName}\n` +
@@ -1080,6 +1086,7 @@ app.post('/api/check-reminders', async (req, res) => {
         bookingId: booking.id,
         leadPhone: leadPhone,
         leadName: leadName,
+        tenantWhatsApp: tenantWhatsApp, // ← ADDED THIS!
         message: message
       });
       
