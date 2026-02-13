@@ -309,7 +309,7 @@ app.post('/api/search-properties', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 5: Get Available Slots - PRODUCTION VERSION
+// ENDPOINT 5: Get Available Slots - FINAL FIXED VERSION
 // ============================================
 app.post('/api/available-slots-v2', async (req, res) => {
   try {
@@ -320,203 +320,133 @@ app.post('/api/available-slots-v2', async (req, res) => {
     console.log('propertyId:', propertyId);
     console.log('tenantId:', tenantId);
     
-    // Validate inputs
     if (!propertyId || !tenantId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'propertyId and tenantId are required' 
-      });
+      return res.status(400).json({ success: false, error: 'propertyId and tenantId required' });
     }
     
-    // 1. GET TENANT CONFIGURATION
-    console.log('Fetching tenant config...');
+    // 1. GET TENANT CONFIG
     const tenant = await base('Tenants').find(tenantId);
     
     const calendarId = tenant.get('Google Calendar ID');
     const workStart = parseInt(tenant.get('Work Start Hour') || 9);
     const workEnd = parseInt(tenant.get('Work End Hour') || 17);
-    const slotDuration = parseInt(tenant.get('Slot Duration') || 60); // minutes
+    const slotDuration = parseInt(tenant.get('Slot Duration') || 60);
     const workingDaysRaw = tenant.get('Working Days') || "Monday, Tuesday, Wednesday, Thursday, Friday";
     const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
     const daysAhead = parseInt(tenant.get('Days Ahead') || 30);
     
-    // Normalize working days to a string (handle both array and string)
+    // Normalize working days
     let workingDaysStr;
     if (Array.isArray(workingDaysRaw)) {
-      // Convert array ['Mon', 'Tue'] to string "Monday, Tuesday"
       const dayMap = {
-        'Mon': 'Monday',
-        'Tue': 'Tuesday', 
-        'Wed': 'Wednesday',
-        'Thu': 'Thursday',
-        'Fri': 'Friday',
-        'Sat': 'Saturday',
-        'Sun': 'Sunday',
-        'Monday': 'Monday',
-        'Tuesday': 'Tuesday',
-        'Wednesday': 'Wednesday',
-        'Thursday': 'Thursday',
-        'Friday': 'Friday',
-        'Saturday': 'Saturday',
-        'Sunday': 'Sunday'
+        'Mon': 'Monday', 'Tue': 'Tuesday', 'Wed': 'Wednesday',
+        'Thu': 'Thursday', 'Fri': 'Friday', 'Sat': 'Saturday', 'Sun': 'Sunday'
       };
       workingDaysStr = workingDaysRaw.map(d => dayMap[d] || d).join(', ');
     } else {
-      // It's already a string
-      workingDaysStr = workingDaysRaw;
-      // But might have short names, expand them
-      workingDaysStr = workingDaysStr
-        .replace(/\bMon\b/g, 'Monday')
-        .replace(/\bTue\b/g, 'Tuesday')
-        .replace(/\bWed\b/g, 'Wednesday')
-        .replace(/\bThu\b/g, 'Thursday')
-        .replace(/\bFri\b/g, 'Friday')
-        .replace(/\bSat\b/g, 'Saturday')
+      workingDaysStr = workingDaysRaw
+        .replace(/\bMon\b/g, 'Monday').replace(/\bTue\b/g, 'Tuesday')
+        .replace(/\bWed\b/g, 'Wednesday').replace(/\bThu\b/g, 'Thursday')
+        .replace(/\bFri\b/g, 'Friday').replace(/\bSat\b/g, 'Saturday')
         .replace(/\bSun\b/g, 'Sunday');
     }
     
-    console.log('Tenant Config:');
-    console.log('  Calendar ID:', calendarId);
-    console.log('  Work hours:', workStart, '-', workEnd);
-    console.log('  Slot duration:', slotDuration, 'minutes');
-    console.log('  Working days (raw):', workingDaysRaw);
-    console.log('  Working days (normalized):', workingDaysStr);
+    console.log('CONFIG:');
+    console.log('  Work: ', workStart + ':00 -', workEnd + ':00');
+    console.log('  Duration:', slotDuration, 'min');
+    console.log('  Days:', workingDaysStr);
     console.log('  Timezone:', timezone);
-    console.log('  Days ahead:', daysAhead);
     
-    if (!calendarId) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Tenant does not have a Google Calendar configured' 
-      });
-    }
-    
-    // 2. GET PROPERTY DETAILS
+    // 2. GET PROPERTY
     const propertyRecord = await base('Properties').find(propertyId);
     const propertyName = propertyRecord.get('Property Name');
-    console.log('Property:', propertyName);
     
-    // 3. GET CURRENT TIME IN TENANT'S TIMEZONE
+    // 3. GET BOOKED EVENTS
     const now = new Date();
-    const nowInTenantTZ = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-    
-    console.log('Current UTC time:', now.toISOString());
-    console.log('Current tenant time:', nowInTenantTZ.toLocaleString('en-KE'));
-    
-    // 4. SEARCH ALL BOOKED EVENTS FOR THIS PROPERTY
-    const searchEnd = new Date(nowInTenantTZ);
+    const searchEnd = new Date(now);
     searchEnd.setDate(searchEnd.getDate() + daysAhead);
-    
-    console.log('Searching calendar from:', nowInTenantTZ.toISOString());
-    console.log('Searching calendar to:', searchEnd.toISOString());
     
     const calendarResponse = await calendar.events.list({
       calendarId: calendarId,
-      timeMin: nowInTenantTZ.toISOString(),
+      timeMin: now.toISOString(),
       timeMax: searchEnd.toISOString(),
-      q: propertyId, // Search for property ID in event
+      q: propertyId,
       singleEvents: true,
       orderBy: 'startTime'
     });
     
-    const bookedEvents = calendarResponse.data.items || [];
-    console.log('Booked events found in calendar:', bookedEvents.length);
-    
-    if (bookedEvents.length > 0) {
-      console.log('Booked slots:');
-      bookedEvents.forEach((e, i) => {
-        const start = new Date(e.start.dateTime || e.start.date);
-        console.log(`  ${i+1}. ${start.toLocaleString('en-KE', { timeZone: timezone })}`);
-      });
-    }
-    
-    // Convert booked events to date objects
-    const booked = bookedEvents.map(event => ({
-      start: new Date(event.start.dateTime || event.start.date),
-      end: new Date(event.end.dateTime || event.end.date)
+    const booked = (calendarResponse.data.items || []).map(e => ({
+      start: new Date(e.start.dateTime || e.start.date),
+      end: new Date(e.end.dateTime || e.end.date)
     }));
     
-    // 5. GENERATE CANDIDATE SLOTS
-    const minSlotTime = new Date(nowInTenantTZ.getTime() + (60 * 60 * 1000)); // 1 hour buffer
-    console.log('Minimum slot time (1hr buffer):', minSlotTime.toLocaleString('en-KE'));
+    console.log('Booked events:', booked.length);
     
+    // 4. GENERATE SLOTS
+    const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000)); // 1hr buffer
     const freeSlots = [];
-    const MAX_SLOTS_TO_RETURN = 5;
+    const MAX_SLOTS = 5;
     
-    function overlaps(slotStart, slotEnd) {
-      return booked.some(b => {
-        // Overlap if: slotStart < b.end AND slotEnd > b.start
-        return slotStart < b.end && slotEnd > b.start;
-      });
+    function overlaps(start, end) {
+      return booked.some(b => start < b.end && end > b.start);
     }
     
     function isWorkingDay(d) {
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      const dayName = dayNames[d.getDay()];
-      return workingDaysStr.includes(dayName);
+      return workingDaysStr.includes(dayNames[d.getDay()]);
     }
     
     console.log('Generating slots...');
-    let daysChecked = 0;
-    let slotsSkipped = { past: 0, weekend: 0, overlap: 0, endTimeIssue: 0 };
     
-    // Loop through days
-    for (let dayOffset = 0; dayOffset < daysAhead && freeSlots.length < MAX_SLOTS_TO_RETURN; dayOffset++) {
-      const day = new Date(nowInTenantTZ);
+    for (let dayOffset = 0; dayOffset < daysAhead && freeSlots.length < MAX_SLOTS; dayOffset++) {
+      const day = new Date(now);
       day.setDate(day.getDate() + dayOffset);
       day.setHours(0, 0, 0, 0);
       
-      daysChecked++;
-      
-      const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][day.getDay()];
-      const dateStr = day.toLocaleDateString('en-KE');
-      
-      // Check if working day
       if (!isWorkingDay(day)) {
-        console.log(`Day ${dayOffset + 1} (${dayName} ${dateStr}): SKIPPED - not a working day`);
-        slotsSkipped.weekend++;
-        continue;
+        continue; // Skip non-working days silently
       }
       
-      console.log(`Day ${dayOffset + 1} (${dayName} ${dateStr}): Checking slots ${workStart}:00 - ${workEnd}:00...`);
+      const dayStr = day.toLocaleDateString('en-KE', { timeZone: timezone });
+      console.log(`Checking ${dayStr}...`);
       
-      let daySlots = 0;
-      
-      // Generate hourly slots for this day
-      for (let hour = workStart; hour < workEnd && freeSlots.length < MAX_SLOTS_TO_RETURN; hour++) {
+      // Generate slots for this day
+      for (let hour = workStart; hour < workEnd && freeSlots.length < MAX_SLOTS; ) {
+        // Create slot start time
         const slotStart = new Date(day);
         slotStart.setHours(hour, 0, 0, 0);
         
+        // Create slot end time
         const slotEnd = new Date(slotStart);
         slotEnd.setMinutes(slotEnd.getMinutes() + slotDuration);
         
-        const slotStartStr = slotStart.toLocaleString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
-        const slotEndStr = slotEnd.toLocaleString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
+        const startStr = slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
+        const endStr = slotEnd.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
         
-        // Skip if slot is in the past
+        // Skip if in the past
         if (slotStart <= minSlotTime) {
-          console.log(`  ${slotStartStr}: SKIPPED - in the past (before ${minSlotTime.toLocaleString('en-KE', { timeZone: timezone })})`);
-          slotsSkipped.past++;
+          console.log(`  ${startStr}: PAST`);
+          hour++; // Move to next hour
           continue;
         }
         
-        // Skip if slot end goes beyond work hours
-        if (slotEnd.getHours() > workEnd || (slotEnd.getHours() === workEnd && slotEnd.getMinutes() > 0)) {
-          console.log(`  ${slotStartStr}: SKIPPED - end time ${slotEndStr} goes beyond work end ${workEnd}:00`);
-          slotsSkipped.endTimeIssue++;
-          continue;
+        // Skip if end time goes beyond work hours
+        const endHour = slotEnd.getHours();
+        const endMinute = slotEnd.getMinutes();
+        if (endHour > workEnd || (endHour === workEnd && endMinute > 0)) {
+          console.log(`  ${startStr}: END (${endStr}) beyond work hours`);
+          break; // No more slots today
         }
         
-        // Skip if overlaps with booked event
+        // Skip if overlaps
         if (overlaps(slotStart, slotEnd)) {
-          console.log(`  ${slotStartStr}: SKIPPED - overlaps with existing booking`);
-          slotsSkipped.overlap++;
+          console.log(`  ${startStr}: BOOKED`);
+          hour++; // Move to next hour
           continue;
         }
         
-        // This slot is free!
-        console.log(`  ${slotStartStr} - ${slotEndStr}: ✅ FREE SLOT!`);
-        daySlots++;
+        // FREE SLOT!
+        console.log(`  ${startStr} - ${endStr}: ✅ FREE`);
         
         freeSlots.push({
           number: freeSlots.length + 1,
@@ -535,55 +465,28 @@ app.post('/api/available-slots-v2', async (req, res) => {
             hour12: true 
           })
         });
-      }
-      
-      console.log(`  Day summary: Found ${daySlots} free slots`);
-      
-      if (freeSlots.length >= MAX_SLOTS_TO_RETURN) {
-        console.log(`  Stopping - reached ${MAX_SLOTS_TO_RETURN} slots`);
-        break;
+        
+        // Move to next slot based on duration
+        const nextHour = Math.floor((hour * 60 + slotDuration) / 60);
+        hour = nextHour;
       }
     }
     
-    console.log('========================================');
-    console.log('SLOT GENERATION SUMMARY:');
-    console.log('  Days checked:', daysChecked);
-    console.log('  Slots skipped (past time):', slotsSkipped.past);
-    console.log('  Slots skipped (weekend/non-working):', slotsSkipped.weekend);
-    console.log('  Slots skipped (end time beyond work hours):', slotsSkipped.endTimeIssue);
-    console.log('  Slots skipped (overlapping with bookings):', slotsSkipped.overlap);
-    console.log('  ');
-    console.log('  ✅ FREE SLOTS FOUND:', freeSlots.length);
+    console.log('Found', freeSlots.length, 'free slots');
     console.log('========================================');
     
-    if (freeSlots.length > 0) {
-      console.log('Free slots to return:');
-      freeSlots.forEach(s => {
-        console.log(`  ${s.number}. ${s.displayDate}, ${s.displayTime}`);
-      });
-    } else {
-      console.log('⚠️  NO SLOTS FOUND!');
-      console.log('Possible reasons:');
-      console.log('  - All slots are in the past?');
-      console.log('  - Working days config issue?');
-      console.log('  - Work hours too narrow?');
-      console.log('  - All slots booked?');
-    }
-    
-    // 6. CREATE SLOT MAP
+    // 5. CREATE SLOT MAP
     const slotMap = {};
     freeSlots.forEach(slot => {
       slotMap[slot.number] = `${slot.start}|${slot.end}`;
     });
     
-    // 7. FORMAT MESSAGE
+    // 6. RETURN
     const message = freeSlots.length > 0
       ? `📅 Available viewings:\n\n` + 
         freeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
         `\n\nReply with slot number.`
-      : `Sorry, no available slots in the next ${daysAhead} days.\n\nOur agent will contact you!`;
-    
-    console.log('========================================');
+      : `No available slots in the next ${daysAhead} days.\n\nOur agent will contact you!`;
     
     res.json({
       success: true,
@@ -595,8 +498,7 @@ app.post('/api/available-slots-v2', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('ERROR in available-slots-v2:', error);
-    console.error('Stack:', error.stack);
+    console.error('ERROR:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
