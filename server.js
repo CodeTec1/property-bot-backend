@@ -385,7 +385,7 @@ app.post('/api/available-slots-v2', async (req, res) => {
     // 4. GENERATE SLOTS
     const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000)); // 1hr buffer
     const freeSlots = [];
-    const MAX_SLOTS = 5;
+    const MAX_SLOTS = 7;
     
     function overlaps(start, end) {
       return booked.some(b => start < b.end && end > b.start);
@@ -742,13 +742,21 @@ app.post('/api/create-booking', async (req, res) => {
     }
     
     // 7. FORMAT MESSAGES
-    const confirmMessage = `✅ *Viewing Confirmed!*\n\n` +
-      `🏠 *Property:* ${propertyName}\n` +
-      `📅 *Date:* ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
-      `⏰ *Time:* ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
+    const slotDurationMinutes = slotDuration;
+    const durationText = slotDurationMinutes >= 60 
+      ? `${Math.floor(slotDurationMinutes / 60)} hour${slotDurationMinutes > 60 ? 's' : ''}`
+      : `${slotDurationMinutes} minutes`;
+    
+    const confirmMessage = `✅ *VIEWING CONFIRMED!*\n\n` +
+      `📋 *Booking Details:*\n` +
+      `🏠 Property: ${propertyName}\n` +
+      `📅 Date: ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric' })}\n` +
+      `⏰ Time: ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
+      `⏱️ Duration: ${durationText}\n` +
       `📍 *Location:* ${propertyAddress}\n\n` +
-      `We'll send you a reminder. See you there! 🎉\n\n` +
-      `To cancel, reply *CANCEL*`;
+      (agentName ? `👤 *Agent:* ${agentName}\n` : '') +
+      (agentPhone ? `📱 *Agent Phone:* ${agentPhone}\n\n` : '\n') +
+      `See you there! Reply CANCEL if you need to cancel.`;
     
     const agentMessage = `🔔 *NEW VIEWING SCHEDULED*\n\n` +
       `📋 *CLIENT:*\n` +
@@ -758,7 +766,8 @@ app.post('/api/create-booking', async (req, res) => {
       `${propertyName}\n` +
       `${propertyAddress}\n\n` +
       `📅 ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
-      `⏰ ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
+      `⏰ ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
+      `⏱️ Duration: ${durationText}\n\n` +
       `✅ Added to your calendar`;
     
     console.log('BOOKING SUCCESSFUL!');
