@@ -931,32 +931,23 @@ app.post('/api/cancel-booking', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 8: Check and Send Reminders
+// ENDPOINT 8: Check Reminders AND Follow-Ups (COMBINED)
 // ============================================
-app.post('/api/check-reminders', async (req, res) => {
+app.post('/api/check-notifications', async (req, res) => {
   try {
     console.log('========================================');
-    console.log('CHECKING FOR REMINDERS...');
+    console.log('CHECKING FOR NOTIFICATIONS (Reminders + Follow-ups)...');
     
     const now = new Date();
-    console.log('Current time:', now.toISOString());
+    const allNotifications = [];
     
-    // Calculate time windows
+    // ===================================
+    // 1. CHECK REMINDERS (12h and 1h)
+    // ===================================
+    
+    // 12-hour window
     const in12Hours = new Date(now.getTime() + (12 * 60 * 60 * 1000));
     const in11Hours = new Date(now.getTime() + (11 * 60 * 60 * 1000));
-    
-    const in1Hour = new Date(now.getTime() + (1 * 60 * 60 * 1000));
-    const in50Minutes = new Date(now.getTime() + (50 * 60 * 1000));
-    
-    console.log('12h window:', in11Hours.toISOString(), 'to', in12Hours.toISOString());
-    console.log('1h window:', in50Minutes.toISOString(), 'to', in1Hour.toISOString());
-    
-    const remindersToSend = [];
-    
-    // ===================================
-    // FIND 12-HOUR REMINDERS
-    // ===================================
-    console.log('Looking for 12-hour reminders...');
     
     const bookings12h = await base('Bookings')
       .select({
@@ -970,66 +961,47 @@ app.post('/api/check-reminders', async (req, res) => {
       })
       .all();
     
-    console.log('Found', bookings12h.length, '12-hour reminders');
-    
     for (const booking of bookings12h) {
       const leadId = booking.get('Lead')?.[0];
       const propertyId = booking.get('Property')?.[0];
       const tenantId = booking.get('Tenant')?.[0];
       const startTime = new Date(booking.get('StartDateTime'));
       
-      if (!leadId || !propertyId || !tenantId) {
-        console.log('Skipping booking', booking.id, '- missing data');
-        continue;
-      }
+      if (!leadId || !propertyId || !tenantId) continue;
       
-      // Get lead details
       const lead = await base('Leads').find(leadId);
-      const leadPhone = lead.get('Phone');
-      const leadName = lead.get('Name');
-      
-      // Get property details
       const property = await base('Properties').find(propertyId);
-      const propertyName = property.get('Property Name');
-      const propertyAddress = property.get('Address');
+      const tenant = await base('Tenants').find(tenantId);
       
-      // Get agent details
       const agentNameRaw = property.get('Agent Name');
       const agentPhoneRaw = property.get('Agent Phone');
       const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
       const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
       
-      // Get tenant timezone and WhatsApp number
-      const tenant = await base('Tenants').find(tenantId);
       const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
-      const tenantWhatsApp = tenant.get('WhatsApp Number');
       
-      // Format message
       const message = `🔔 REMINDER: Viewing Tomorrow!\n\n` +
-        `🏠 ${propertyName}\n` +
+        `🏠 ${property.get('Property Name')}\n` +
         `📅 ${startTime.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' })}\n` +
         `⏰ ${startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
-        `📍 ${propertyAddress}\n\n` +
+        `📍 ${property.get('Address')}\n\n` +
         (agentName ? `👤 Agent: ${agentName}\n` : '') +
         (agentPhone ? `📱 ${agentPhone}\n\n` : '\n') +
         `See you there!`;
       
-      remindersToSend.push({
-        type: '12h',
+      allNotifications.push({
+        type: 'reminder_12h',
         bookingId: booking.id,
-        leadPhone: leadPhone,
-        leadName: leadName,
-        tenantWhatsApp: tenantWhatsApp, // ← ADDED THIS!
+        leadPhone: lead.get('Phone'),
+        leadName: lead.get('Name'),
+        tenantWhatsApp: tenant.get('WhatsApp Number'),
         message: message
       });
-      
-      console.log('✓ 12h reminder for', leadName, '-', propertyName);
     }
     
-    // ===================================
-    // FIND 1-HOUR REMINDERS
-    // ===================================
-    console.log('Looking for 1-hour reminders...');
+    // 1-hour window
+    const in1Hour = new Date(now.getTime() + (1 * 60 * 60 * 1000));
+    const in50Minutes = new Date(now.getTime() + (50 * 60 * 1000));
     
     const bookings1h = await base('Bookings')
       .select({
@@ -1043,124 +1015,40 @@ app.post('/api/check-reminders', async (req, res) => {
       })
       .all();
     
-    console.log('Found', bookings1h.length, '1-hour reminders');
-    
     for (const booking of bookings1h) {
       const leadId = booking.get('Lead')?.[0];
       const propertyId = booking.get('Property')?.[0];
       const tenantId = booking.get('Tenant')?.[0];
       
-      if (!leadId || !propertyId || !tenantId) {
-        console.log('Skipping booking', booking.id, '- missing data');
-        continue;
-      }
+      if (!leadId || !propertyId || !tenantId) continue;
       
-      // Get lead details
       const lead = await base('Leads').find(leadId);
-      const leadPhone = lead.get('Phone');
-      const leadName = lead.get('Name');
-      
-      // Get property details
       const property = await base('Properties').find(propertyId);
-      const propertyName = property.get('Property Name');
-      const propertyAddress = property.get('Address');
-      
-      // Get tenant WhatsApp number
       const tenant = await base('Tenants').find(tenantId);
-      const tenantWhatsApp = tenant.get('WhatsApp Number');
       
-      // Format message
       const message = `⏰ Your viewing starts in 1 HOUR!\n\n` +
-        `🏠 ${propertyName}\n` +
-        `📍 ${propertyAddress}\n\n` +
+        `🏠 ${property.get('Property Name')}\n` +
+        `📍 ${property.get('Address')}\n\n` +
         `The agent is ready for you! 🎉`;
       
-      remindersToSend.push({
-        type: '1h',
+      allNotifications.push({
+        type: 'reminder_1h',
         bookingId: booking.id,
-        leadPhone: leadPhone,
-        leadName: leadName,
-        tenantWhatsApp: tenantWhatsApp, // ← ADDED THIS!
+        leadPhone: lead.get('Phone'),
+        leadName: lead.get('Name'),
+        tenantWhatsApp: tenant.get('WhatsApp Number'),
         message: message
       });
-      
-      console.log('✓ 1h reminder for', leadName, '-', propertyName);
     }
     
     // ===================================
-    // RETURN RESULTS
+    // 2. CHECK FOLLOW-UPS (3 hours after)
     // ===================================
-    console.log('Total reminders to send:', remindersToSend.length);
-    console.log('========================================');
     
-    res.json({
-      success: true,
-      reminders: remindersToSend,
-      count: remindersToSend.length
-    });
-    
-  } catch (error) {
-    console.error('ERROR in check-reminders:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ============================================
-// ENDPOINT 9: Mark Reminder as Sent
-// ============================================
-app.post('/api/mark-reminder-sent', async (req, res) => {
-  try {
-    const { bookingId, reminderType } = req.body;
-    
-    console.log('Marking reminder as sent:', bookingId, reminderType);
-    
-    if (!bookingId || !reminderType) {
-      return res.status(400).json({ success: false, error: 'bookingId and reminderType required' });
-    }
-    
-    const updateData = {};
-    
-    if (reminderType === '12h') {
-      updateData['Reminder12hSent'] = true;
-    } else if (reminderType === '1h') {
-      updateData['Reminder1hSent'] = true;
-    } else {
-      return res.status(400).json({ success: false, error: 'Invalid reminderType' });
-    }
-    
-    await base('Bookings').update(bookingId, updateData);
-    
-    console.log('✓ Marked as sent');
-    
-    res.json({ success: true });
-    
-  } catch (error) {
-    console.error('ERROR in mark-reminder-sent:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ============================================
-// ENDPOINT 10: Check and Send Follow-Ups
-// ============================================
-app.post('/api/check-followups', async (req, res) => {
-  try {
-    console.log('========================================');
-    console.log('CHECKING FOR FOLLOW-UPS...');
-    
-    const now = new Date();
-    console.log('Current time:', now.toISOString());
-    
-    // Calculate 3-hour window (2.5h to 3.5h after viewing)
     const twoHalfHoursAgo = new Date(now.getTime() - (2.5 * 60 * 60 * 1000));
     const threeHalfHoursAgo = new Date(now.getTime() - (3.5 * 60 * 60 * 1000));
     
-    console.log('Looking for viewings between:', threeHalfHoursAgo.toISOString(), 'and', twoHalfHoursAgo.toISOString());
-    
-    const followUpsToSend = [];
-    
-    // Find bookings that ended 3 hours ago and haven't been followed up
-    const bookings = await base('Bookings')
+    const followUpBookings = await base('Bookings')
       .select({
         filterByFormula: `AND(
           {Status} = "Scheduled",
@@ -1172,97 +1060,90 @@ app.post('/api/check-followups', async (req, res) => {
       })
       .all();
     
-    console.log('Found', bookings.length, 'follow-ups to send');
-    
-    for (const booking of bookings) {
+    for (const booking of followUpBookings) {
       const leadId = booking.get('Lead')?.[0];
       const propertyId = booking.get('Property')?.[0];
       const tenantId = booking.get('Tenant')?.[0];
       
-      if (!leadId || !propertyId || !tenantId) {
-        console.log('Skipping booking', booking.id, '- missing data');
-        continue;
-      }
+      if (!leadId || !propertyId || !tenantId) continue;
       
-      // Get lead details
       const lead = await base('Leads').find(leadId);
-      const leadPhone = lead.get('Phone');
-      const leadName = lead.get('Name');
-      
-      // Get property details
       const property = await base('Properties').find(propertyId);
-      const propertyName = property.get('Property Name');
-      
-      // Get tenant details
       const tenant = await base('Tenants').find(tenantId);
-      const tenantWhatsApp = tenant.get('WhatsApp Number');
       
-      // Format message
-      const message = `Hi ${leadName} 👋\n\n` +
-        `How was your viewing of ${propertyName}?\n\n` +
+      const message = `Hi ${lead.get('Name')} 👋\n\n` +
+        `How was your viewing of ${property.get('Property Name')}?\n\n` +
         `Reply:\n` +
         `1️⃣ Interested\n` +
         `2️⃣ Not Interested\n` +
         `3️⃣ HI – to search another property\n\n` +
         `We're here to help! 🏡`;
       
-      followUpsToSend.push({
+      allNotifications.push({
+        type: 'followup',
         bookingId: booking.id,
         leadId: leadId,
-        leadPhone: leadPhone,
-        leadName: leadName,
-        propertyName: propertyName,
-        tenantWhatsApp: tenantWhatsApp,
+        leadPhone: lead.get('Phone'),
+        leadName: lead.get('Name'),
+        propertyName: property.get('Property Name'),
+        tenantWhatsApp: tenant.get('WhatsApp Number'),
         message: message
       });
-      
-      console.log('✓ Follow-up for', leadName, '-', propertyName);
     }
     
-    console.log('Total follow-ups to send:', followUpsToSend.length);
+    console.log('Total notifications:', allNotifications.length);
+    console.log('  Reminders 12h:', allNotifications.filter(n => n.type === 'reminder_12h').length);
+    console.log('  Reminders 1h:', allNotifications.filter(n => n.type === 'reminder_1h').length);
+    console.log('  Follow-ups:', allNotifications.filter(n => n.type === 'followup').length);
     console.log('========================================');
     
     res.json({
       success: true,
-      followUps: followUpsToSend,
-      count: followUpsToSend.length
+      notifications: allNotifications,
+      count: allNotifications.length
     });
     
   } catch (error) {
-    console.error('ERROR in check-followups:', error);
+    console.error('ERROR:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ============================================
-// ENDPOINT 11: Mark Follow-Up as Sent
+// ENDPOINT 9: Mark Notification as Sent
 // ============================================
-app.post('/api/mark-followup-sent', async (req, res) => {
+app.post('/api/mark-notification-sent', async (req, res) => {
   try {
-    const { bookingId } = req.body;
+    const { bookingId, type } = req.body;
     
-    console.log('Marking follow-up as sent:', bookingId);
-    
-    if (!bookingId) {
-      return res.status(400).json({ success: false, error: 'bookingId required' });
+    if (!bookingId || !type) {
+      return res.status(400).json({ success: false, error: 'bookingId and type required' });
     }
     
-    await base('Bookings').update(bookingId, {
-      'FollowUpSent': true
-    });
+    const updateData = {};
     
-    console.log('✓ Marked as sent');
+    if (type === 'reminder_12h') {
+      updateData['Reminder12hSent'] = true;
+    } else if (type === 'reminder_1h') {
+      updateData['Reminder1hSent'] = true;
+    } else if (type === 'followup') {
+      updateData['FollowUpSent'] = true;
+    }
+    
+    await base('Bookings').update(bookingId, updateData);
     
     res.json({ success: true });
     
   } catch (error) {
-    console.error('ERROR in mark-followup-sent:', error);
+    console.error('ERROR:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
+
+
 // ============================================
-// ENDPOINT 12: Handle Follow-Up Response
+// ENDPOINT 10: Handle Follow-Up Response
 // ============================================
 app.post('/api/handle-followup-response', async (req, res) => {
   try {
@@ -1329,6 +1210,23 @@ app.post('/api/handle-followup-response', async (req, res) => {
 });
 
 // ============================================
+// ENDPOINT 11: Mark awaiting-followup
+// ============================================
+app.post('/api/mark-awaiting-followup', async (req, res) => {
+  try {
+    const { leadId, awaiting } = req.body;
+    
+    await base('Leads').update(leadId, {
+      'AwaitingFollowUpResponse': awaiting
+    });
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================
 // Start Server
 // ============================================
 const PORT = process.env.PORT || 3000;
@@ -1342,4 +1240,8 @@ app.listen(PORT, () => {
   console.log(`   - POST /api/available-slots-v2`);
   console.log(`   - POST /api/create-booking`);
   console.log(`   - POST /api/cancel-booking`);
+  console.log(`   - POST /api/check-notifications`);
+  console.log(`   - POST /api/mark-notification-sent`);
+  console.log(`   - POST /api/handle-followup-response`);
+  console.log(`   - POST /api/mark-awaiting-followup`);
 });

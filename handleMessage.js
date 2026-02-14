@@ -1,4 +1,4 @@
-// handleMessage.js - Enhanced conversation logic with natural language support
+// handleMessage.js - Enhanced conversation logic with natural language support + Follow-up handler
 
 async function handleMessage(input) {
   try {
@@ -10,6 +10,53 @@ async function handleMessage(input) {
     // 2. Identify lead and stage
     const leadExists = input.lead_id && input.lead_id.length > 0;
     const stage = input.lead_stage || null;
+    
+    // ============================================
+    // FOLLOW-UP RESPONSE HANDLER (Route 8)
+    // ============================================
+    
+    // Check if lead is awaiting follow-up response
+    const awaitingFollowUp = input.awaiting_followup_response || false;
+    
+    if (leadExists && awaitingFollowUp && (message === '1' || message === '2')) {
+      console.log('Follow-up response detected!');
+      
+      const leadName = input.lead_name || "there";
+      const leadPhone = phone;
+      const tenantWhatsApp = input.tenant_whatsapp || "";
+      
+      if (message === '1') {
+        // User is INTERESTED!
+        return {
+          action: "followup_interested",
+          updateFields: {
+            "Status": "Hot Lead",
+            "Conversation Stage": "interested_after_viewing",
+            "AwaitingFollowUpResponse": false
+          },
+          message: `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`,
+          agentNotification: {
+            message: `🔥 *HOT LEAD ALERT!*\n\n${leadName} is INTERESTED after viewing!\n\n📞 Contact them ASAP: ${leadPhone}\n\nStrike while the iron is hot! 🎯`,
+            sendTo: tenantWhatsApp
+          }
+        };
+      } else if (message === '2') {
+        // User is NOT interested
+        return {
+          action: "followup_not_interested",
+          updateFields: {
+            "Status": "Not Interested",
+            "Conversation Stage": "not_interested_after_viewing",
+            "AwaitingFollowUpResponse": false
+          },
+          message: `Thank you for your feedback! 🙏\n\nIf you change your mind, just reply HI anytime.\n\nWe're always here to help! 🏡`
+        };
+      }
+    }
+    
+    // ============================================
+    // END FOLLOW-UP HANDLER - Continue normal flow
+    // ============================================
 
     // 3. Reconstruct lead object
     const lead = {
@@ -191,9 +238,9 @@ Just your name is enough! 😊`;
 What's your budget?
 
 Examples:
-• 5000000
-• 5M (5 million)
-• 500K (500 thousand)
+• 500000
+• 5M 
+• 500K 
 
 Just type the amount!`;
       return response;
