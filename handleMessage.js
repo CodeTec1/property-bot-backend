@@ -34,7 +34,7 @@ async function handleMessage(input) {
             "Conversation Stage": "interested_after_viewing",
             "AwaitingFollowUpResponse": false
           },
-          message: `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`,
+          replyMessage: `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`,
           agentNotification: {
             message: `🔥 *HOT LEAD ALERT!*\n\n${leadName} is INTERESTED after viewing!\n\n📞 Contact them ASAP: ${leadPhone}\n\nStrike while the iron is hot! 🎯`,
             sendTo: tenantWhatsApp
@@ -49,7 +49,7 @@ async function handleMessage(input) {
             "Conversation Stage": "not_interested_after_viewing",
             "AwaitingFollowUpResponse": false
           },
-          message: `Thank you for your feedback! 🙏\n\nIf you change your mind, just reply HI anytime.\n\nWe're always here to help! 🏡`
+          replyMessage: `Thank you for your feedback! 🙏\n\nIf you change your mind, just reply HI anytime.\n\nWe're always here to help! 🏡`
         };
       }
     }
