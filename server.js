@@ -848,6 +848,7 @@ app.post('/api/cancel-booking', async (req, res) => {
     
     if (bookings.length === 0) {
       console.log('NO BOOKINGS FOUND for this lead!');
+      console.log('========================================');
       return res.json({
         success: false,
         noBooking: true,
@@ -859,10 +860,12 @@ app.post('/api/cancel-booking', async (req, res) => {
     console.log('Found booking to cancel:', booking.id);
     
     const eventId = booking.get('Google Event ID');
-    const propertyId = booking.get('Property')?.[0];
+    const propertyIdArray = booking.get('Property');
+    const propertyId = Array.isArray(propertyIdArray) ? propertyIdArray[0] : propertyIdArray;
     
     if (!eventId) {
       console.log('No Google Event ID found');
+      console.log('========================================');
       return res.json({
         success: false,
         noEvent: true,
@@ -870,13 +873,39 @@ app.post('/api/cancel-booking', async (req, res) => {
       });
     }
     
-    // Get property and lead details
-    const property = await base('Properties').find(propertyId);
-    const propertyName = property.get('Property Name');
+    if (!propertyId) {
+      console.log('ERROR: No property ID in booking');
+      console.log('========================================');
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Booking data incomplete - missing property' 
+      });
+    }
     
-    const lead = await base('Leads').find(leadId);
-    const leadName = lead.get('Name');
-    const leadPhone = lead.get('Phone');
+    console.log('Property ID:', propertyId);
+    
+    // Get property and lead details
+    let property, propertyName;
+    try {
+      property = await base('Properties').find(propertyId);
+      propertyName = property.get('Property Name');
+      console.log('Property:', propertyName);
+    } catch (propErr) {
+      console.error('Failed to get property:', propErr.message);
+      propertyName = 'Property';
+    }
+    
+    let lead, leadName, leadPhone;
+    try {
+      lead = await base('Leads').find(leadId);
+      leadName = lead.get('Name');
+      leadPhone = lead.get('Phone');
+      console.log('Lead:', leadName);
+    } catch (leadErr) {
+      console.error('Failed to get lead:', leadErr.message);
+      leadName = 'there';
+      leadPhone = '';
+    }
     
     const scheduledTime = new Date(booking.get('StartDateTime'));
     
