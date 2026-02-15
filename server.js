@@ -1020,23 +1020,47 @@ app.post('/api/check-notifications', async (req, res) => {
       const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
       
       const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
+      const propertyName = property.get('Property Name');
+      const propertyAddress = property.get('Address');
+      const leadName = lead.get('Name');
+      const leadPhone = lead.get('Phone');
+      
+      const formattedDate = startTime.toLocaleDateString('en-KE', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric' });
+      const formattedTime = startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
       
       const message = `🔔 REMINDER: Viewing Tomorrow!\n\n` +
-        `🏠 ${property.get('Property Name')}\n` +
+        `🏠 ${propertyName}\n` +
         `📅 ${startTime.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' })}\n` +
-        `⏰ ${startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
-        `📍 ${property.get('Address')}\n\n` +
+        `⏰ ${formattedTime}\n` +
+        `📍 ${propertyAddress}\n\n` +
         (agentName ? `👤 Agent: ${agentName}\n` : '') +
         (agentPhone ? `📱 ${agentPhone}\n\n` : '\n') +
         `See you there!`;
       
+      const agentMessage = `🔔 *UPCOMING VIEWING REMINDER*\n\n` +
+        `👤 Client: ${leadName}\n` +
+        `📱 Phone: ${leadPhone}\n` +
+        `🏠 Property: ${propertyName}\n` +
+        `📅 Date: ${formattedDate}\n` +
+        `⏰ Time: ${formattedTime}\n\n` +
+        `Please be ready to meet the client.`;
+      
       allNotifications.push({
         type: 'reminder_12h',
         bookingId: booking.id,
-        leadPhone: lead.get('Phone'),
-        leadName: lead.get('Name'),
+        leadPhone: leadPhone,
+        leadName: leadName,
         tenantWhatsApp: tenant.get('WhatsApp Number'),
-        message: message
+        message: message,
+        agentNotification: {
+          agentPhone: agentPhone,
+          message: agentMessage,
+          clientName: leadName,
+          clientPhone: leadPhone,
+          propertyName: propertyName,
+          date: formattedDate,
+          time: formattedTime
+        }
       });
     }
     
@@ -1067,18 +1091,50 @@ app.post('/api/check-notifications', async (req, res) => {
       const property = await base('Properties').find(propertyId);
       const tenant = await base('Tenants').find(tenantId);
       
+      const agentNameRaw = property.get('Agent Name');
+      const agentPhoneRaw = property.get('Agent Phone');
+      const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
+      const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
+      
+      const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
+      const startTime = new Date(booking.get('StartDateTime'));
+      const propertyName = property.get('Property Name');
+      const propertyAddress = property.get('Address');
+      const leadName = lead.get('Name');
+      const leadPhone = lead.get('Phone');
+      
+      const formattedDate = startTime.toLocaleDateString('en-KE', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric' });
+      const formattedTime = startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
+      
       const message = `⏰ Your viewing starts in 1 HOUR!\n\n` +
-        `🏠 ${property.get('Property Name')}\n` +
-        `📍 ${property.get('Address')}\n\n` +
+        `🏠 ${propertyName}\n` +
+        `📍 ${propertyAddress}\n\n` +
         `The agent is ready for you! 🎉`;
+      
+      const agentMessage = `🔔 *UPCOMING VIEWING REMINDER*\n\n` +
+        `👤 Client: ${leadName}\n` +
+        `📱 Phone: ${leadPhone}\n` +
+        `🏠 Property: ${propertyName}\n` +
+        `📅 Date: ${formattedDate}\n` +
+        `⏰ Time: ${formattedTime}\n\n` +
+        `The client is on their way!`;
       
       allNotifications.push({
         type: 'reminder_1h',
         bookingId: booking.id,
-        leadPhone: lead.get('Phone'),
-        leadName: lead.get('Name'),
+        leadPhone: leadPhone,
+        leadName: leadName,
         tenantWhatsApp: tenant.get('WhatsApp Number'),
-        message: message
+        message: message,
+        agentNotification: {
+          agentPhone: agentPhone,
+          message: agentMessage,
+          clientName: leadName,
+          clientPhone: leadPhone,
+          propertyName: propertyName,
+          date: formattedDate,
+          time: formattedTime
+        }
       });
     }
     
@@ -1180,7 +1236,6 @@ app.post('/api/mark-notification-sent', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 
 // ============================================
