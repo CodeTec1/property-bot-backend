@@ -1058,6 +1058,7 @@ app.post('/api/check-notifications', async (req, res) => {
           clientName: leadName,
           clientPhone: leadPhone,
           propertyName: propertyName,
+          propertyAddress: propertyAddress,
           date: formattedDate,
           time: formattedTime
         }
@@ -1132,6 +1133,7 @@ app.post('/api/check-notifications', async (req, res) => {
           clientName: leadName,
           clientPhone: leadPhone,
           propertyName: propertyName,
+          propertyAddress: propertyAddress,
           date: formattedDate,
           time: formattedTime
         }
