@@ -859,9 +859,33 @@ app.post('/api/cancel-booking', async (req, res) => {
     const booking = bookings[0];
     console.log('Found booking to cancel:', booking.id);
     
+    // DEBUG: Log all fields in the booking
+    console.log('Booking fields:', Object.keys(booking.fields));
+    console.log('All booking data:', JSON.stringify(booking.fields, null, 2));
+    
     const eventId = booking.get('Google Event ID');
-    const propertyIdArray = booking.get('Property');
-    const propertyId = Array.isArray(propertyIdArray) ? propertyIdArray[0] : propertyIdArray;
+    
+    // Try multiple field names for Property
+    let propertyId = null;
+    const possiblePropertyFields = ['Property', 'Property (from Properties)', 'Properties'];
+    
+    for (const fieldName of possiblePropertyFields) {
+      try {
+        const value = booking.get(fieldName);
+        if (value) {
+          propertyId = Array.isArray(value) ? value[0] : value;
+          console.log(`✓ Found property in field "${fieldName}":`, propertyId);
+          break;
+        }
+      } catch (e) {
+        // Field doesn't exist, continue
+      }
+    }
+    
+    if (!propertyId) {
+      console.log('WARNING: Could not find Property field with any name');
+      console.log('Tried:', possiblePropertyFields.join(', '));
+    }
     
     if (!eventId) {
       console.log('No Google Event ID found');
@@ -873,38 +897,31 @@ app.post('/api/cancel-booking', async (req, res) => {
       });
     }
     
-    if (!propertyId) {
-      console.log('ERROR: No property ID in booking');
-      console.log('========================================');
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Booking data incomplete - missing property' 
-      });
-    }
-    
+    console.log('Google Event ID:', eventId);
     console.log('Property ID:', propertyId);
     
-    // Get property and lead details
-    let property, propertyName;
-    try {
-      property = await base('Properties').find(propertyId);
-      propertyName = property.get('Property Name');
-      console.log('Property:', propertyName);
-    } catch (propErr) {
-      console.error('Failed to get property:', propErr.message);
-      propertyName = 'Property';
+    // Get property details (optional - may be missing)
+    let propertyName = 'the property';
+    if (propertyId) {
+      try {
+        const property = await base('Properties').find(propertyId);
+        propertyName = property.get('Property Name') || 'the property';
+        console.log('Property:', propertyName);
+      } catch (propErr) {
+        console.error('Failed to get property:', propErr.message);
+      }
+    } else {
+      console.log('No property ID - skipping property lookup');
     }
     
-    let lead, leadName, leadPhone;
+    // Get lead details
+    let leadName = 'there';
     try {
-      lead = await base('Leads').find(leadId);
-      leadName = lead.get('Name');
-      leadPhone = lead.get('Phone');
+      const lead = await base('Leads').find(leadId);
+      leadName = lead.get('Name') || 'there';
       console.log('Lead:', leadName);
     } catch (leadErr) {
       console.error('Failed to get lead:', leadErr.message);
-      leadName = 'there';
-      leadPhone = '';
     }
     
     const scheduledTime = new Date(booking.get('StartDateTime'));
