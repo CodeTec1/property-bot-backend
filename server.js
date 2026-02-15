@@ -910,6 +910,123 @@ app.post('/api/cancel-booking', async (req, res) => {
       } catch (propErr) {
         console.error('Failed to get property:', propErr.message);
       }
+
+// ============================================
+// ENDPOINT 7: Cancel Booking - COMPLETELY FIXED
+// ============================================
+app.post('/api/cancel-booking', async (req, res) => {
+  try {
+    const { leadId, calendarId } = req.body;
+    
+    console.log('========================================');
+    console.log('CANCEL BOOKING REQUEST:');
+    console.log('leadId:', leadId);
+    console.log('calendarId:', calendarId);
+    
+    if (!leadId || !calendarId) {
+      return res.status(400).json({ success: false, error: 'leadId and calendarId required' });
+    }
+    
+    // ============================================
+    // FIXED: Get ALL scheduled bookings, filter in JavaScript
+    // ============================================
+    
+    console.log('Getting all scheduled bookings...');
+    
+    const allScheduled = await base('Bookings')
+      .select({
+        filterByFormula: `{Status} = "Scheduled"`,
+        sort: [{ field: 'StartDateTime', direction: 'desc' }]
+      })
+      .all();
+    
+    console.log('Total scheduled bookings:', allScheduled.length);
+    
+    // Filter in JavaScript (more reliable than Airtable formulas for linked fields)
+    const bookings = allScheduled.filter(booking => {
+      const leadField = booking.get('Lead');
+      console.log('Checking booking', booking.id, 'Lead field:', leadField);
+      
+      // Handle both array and non-array cases
+      if (Array.isArray(leadField)) {
+        return leadField.includes(leadId);
+      }
+      return leadField === leadId;
+    });
+    
+    console.log('Bookings matching leadId:', bookings.length);
+    
+    if (bookings.length === 0) {
+      console.log('NO BOOKINGS FOUND for this lead!');
+      console.log('========================================');
+      return res.json({
+        success: false,
+        noBooking: true,
+        message: "You don't have any active bookings to cancel.\n\nReply HI to search for properties! 🏡"
+      });
+    }
+    
+    const booking = bookings[0];
+    console.log('Found booking to cancel:', booking.id);
+    
+    // DEBUG: Log all fields in the booking
+    console.log('Booking fields:', Object.keys(booking.fields));
+    console.log('All booking data:', JSON.stringify(booking.fields, null, 2));
+    
+    const eventId = booking.get('Google Event ID');
+    
+    // Try multiple field names for Property
+    let propertyId = null;
+    const possiblePropertyFields = ['Property', 'Property (from Properties)', 'Properties'];
+    
+    for (const fieldName of possiblePropertyFields) {
+      try {
+        const value = booking.get(fieldName);
+        if (value) {
+          propertyId = Array.isArray(value) ? value[0] : value;
+          console.log(`✓ Found property in field "${fieldName}":`, propertyId);
+          break;
+        }
+      } catch (e) {
+        // Field doesn't exist, continue
+      }
+    }
+    
+    if (!propertyId) {
+      console.log('WARNING: Could not find Property field with any name');
+      console.log('Tried:', possiblePropertyFields.join(', '));
+    }
+    
+    if (!eventId) {
+      console.log('No Google Event ID found');
+      console.log('========================================');
+      return res.json({
+        success: false,
+        noEvent: true,
+        message: "Booking found but no calendar event to delete."
+      });
+    }
+    
+    console.log('Google Event ID:', eventId);
+    console.log('Property ID:', propertyId);
+    
+    // Get property details (optional - may be missing)
+    let propertyName = 'the property';
+    let agentPhone = null;
+    if (propertyId) {
+      try {
+        const property = await base('Properties').find(propertyId);
+        propertyName = property.get('Property Name') || 'the property';
+        
+        // Get agent phone
+        const agentPhoneRaw = property.get('Agent Phone');
+        agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
+        
+        console.log('Property:', propertyName);
+        console.log('Agent Phone:', agentPhone);
+      } catch (propErr) {
+        console.error('Failed to get property:', propErr.message);
+      }
     } else {
       console.log('No property ID - skipping property lookup');
     }
@@ -946,8 +1063,8 @@ app.post('/api/cancel-booking', async (req, res) => {
     
     // Update lead conversation stage
     await base('Leads').update(leadId, {
-      'Conversation Stage': 'booking_cancelled',
-      'Status': 'Cancelled'
+      'Conversation Stage': 'booking_cancelled'
+      // Removed: Status update (might not have "Cancelled" option in Leads table)
     });
     
     const userMessage = `❌ *Viewing Cancelled*\n\n` +
@@ -957,12 +1074,27 @@ app.post('/api/cancel-booking', async (req, res) => {
       `⏰ *Time:* ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
       `If you'd like to reschedule, reply *HI* to start over.`;
     
+    const agentMessage = `🔔 *VIEWING CANCELLED*\n\n` +
+      `A viewing has been cancelled.\n\n` +
+      `👤 *Client:* ${leadName}\n` +
+      `🏠 *Property:* ${propertyName}\n` +
+      `📅 *Was scheduled for:* ${scheduledTime.toLocaleDateString('en-KE')} at ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
+      `The calendar event has been removed.`;
+    
     console.log('Cancellation successful');
     console.log('========================================');
     
     res.json({
       success: true,
-      userMessage: userMessage
+      userMessage: userMessage,
+      agentNotification: {
+        agentPhone: agentPhone,
+        message: agentMessage,
+        propertyName: propertyName,
+        leadName: leadName,
+        scheduledDate: scheduledTime.toLocaleDateString('en-KE'),
+        scheduledTime: scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })
+      }
     });
     
   } catch (error) {
