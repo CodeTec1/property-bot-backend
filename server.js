@@ -808,21 +808,11 @@ app.post('/api/cancel-booking', async (req, res) => {
   try {
     const { leadId, calendarId } = req.body;
     
-    console.log('========================================');
-    console.log('CANCEL BOOKING REQUEST:');
-    console.log('leadId:', leadId);
-    console.log('calendarId:', calendarId);
-    
     if (!leadId || !calendarId) {
       return res.status(400).json({ success: false, error: 'leadId and calendarId required' });
     }
     
-    // ============================================
-    // FIXED: Get ALL scheduled bookings, filter in JavaScript
-    // ============================================
-    
-    console.log('Getting all scheduled bookings...');
-    
+    // Search for active bookings for this lead - Get all and filter in JS
     const allScheduled = await base('Bookings')
       .select({
         filterByFormula: `{Status} = "Scheduled"`,
@@ -830,13 +820,9 @@ app.post('/api/cancel-booking', async (req, res) => {
       })
       .all();
     
-    console.log('Total scheduled bookings:', allScheduled.length);
-    
     // Filter in JavaScript (more reliable than Airtable formulas for linked fields)
     const bookings = allScheduled.filter(booking => {
       const leadField = booking.get('Lead');
-      console.log('Checking booking', booking.id, 'Lead field:', leadField);
-      
       // Handle both array and non-array cases
       if (Array.isArray(leadField)) {
         return leadField.includes(leadId);
@@ -844,11 +830,7 @@ app.post('/api/cancel-booking', async (req, res) => {
       return leadField === leadId;
     });
     
-    console.log('Bookings matching leadId:', bookings.length);
-    
     if (bookings.length === 0) {
-      console.log('NO BOOKINGS FOUND for this lead!');
-      console.log('========================================');
       return res.json({
         success: false,
         noBooking: true,
@@ -857,17 +839,8 @@ app.post('/api/cancel-booking', async (req, res) => {
     }
     
     const booking = bookings[0];
-    console.log('Found booking to cancel:', booking.id);
-    
-    // DEBUG: Log all fields in the booking
-    console.log('Booking fields:', Object.keys(booking.fields));
-    console.log('All booking data:', JSON.stringify(booking.fields, null, 2));
     
     const eventId = booking.get('Google Event ID');
-    
-    // Get agent phone directly from booking (it was saved during creation)
-    let agentPhone = booking.get('Agent Phone');
-    console.log('Agent Phone from booking:', agentPhone);
     
     // Try multiple field names for Property
     let propertyId = null;
@@ -878,7 +851,6 @@ app.post('/api/cancel-booking', async (req, res) => {
         const value = booking.get(fieldName);
         if (value) {
           propertyId = Array.isArray(value) ? value[0] : value;
-          console.log(`✓ Found property in field "${fieldName}":`, propertyId);
           break;
         }
       } catch (e) {
@@ -886,14 +858,7 @@ app.post('/api/cancel-booking', async (req, res) => {
       }
     }
     
-    if (!propertyId) {
-      console.log('WARNING: Could not find Property field with any name');
-      console.log('Tried:', possiblePropertyFields.join(', '));
-    }
-    
     if (!eventId) {
-      console.log('No Google Event ID found');
-      console.log('========================================');
       return res.json({
         success: false,
         noEvent: true,
@@ -901,21 +866,25 @@ app.post('/api/cancel-booking', async (req, res) => {
       });
     }
     
-    console.log('Google Event ID:', eventId);
-    console.log('Property ID:', propertyId);
-    
-    // Get property details (optional - may be missing)
+    // Get property details
     let propertyName = 'the property';
+    let agentPhone = null;
+    
     if (propertyId) {
       try {
         const property = await base('Properties').find(propertyId);
         propertyName = property.get('Property Name') || 'the property';
-        console.log('Property:', propertyName);
+        
+        // Get agent phone from lookup field
+        const agentPhoneRaw = property.get('Agent Phone');
+        if (Array.isArray(agentPhoneRaw) && agentPhoneRaw.length > 0) {
+          agentPhone = agentPhoneRaw[0];
+        } else if (agentPhoneRaw && typeof agentPhoneRaw === 'string') {
+          agentPhone = agentPhoneRaw;
+        }
       } catch (propErr) {
         console.error('Failed to get property:', propErr.message);
       }
-    } else {
-      console.log('No property ID - skipping property lookup');
     }
     
     // Get lead details
@@ -923,14 +892,11 @@ app.post('/api/cancel-booking', async (req, res) => {
     try {
       const lead = await base('Leads').find(leadId);
       leadName = lead.get('Name') || 'there';
-      console.log('Lead:', leadName);
     } catch (leadErr) {
       console.error('Failed to get lead:', leadErr.message);
     }
     
     const scheduledTime = new Date(booking.get('StartDateTime'));
-    
-    console.log('Deleting calendar event...');
     
     // Delete Google Calendar event
     try {
@@ -938,7 +904,6 @@ app.post('/api/cancel-booking', async (req, res) => {
         calendarId: calendarId,
         eventId: eventId
       });
-      console.log('Calendar event deleted');
     } catch (calErr) {
       console.error('Calendar deletion error:', calErr.message);
     }
@@ -968,18 +933,7 @@ app.post('/api/cancel-booking', async (req, res) => {
       `📅 *Was scheduled for:* ${scheduledTime.toLocaleDateString('en-KE')} at ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
       `The calendar event has been removed.`;
     
-    console.log('Preparing response...');
-    console.log('Agent Phone at response time:', agentPhone);
-    console.log('Agent Phone type:', typeof agentPhone);
-    console.log('Agent Phone length:', agentPhone ? agentPhone.length : 0);
-    console.log('Agent Phone is null?', agentPhone === null);
-    console.log('Agent Phone is undefined?', agentPhone === undefined);
-    console.log('Agent Phone is empty string?', agentPhone === '');
-    
-    console.log('Cancellation successful');
-    console.log('========================================');
-    
-    const responseData = {
+    res.json({
       success: true,
       userMessage: userMessage,
       agentNotification: {
@@ -990,11 +944,7 @@ app.post('/api/cancel-booking', async (req, res) => {
         scheduledDate: scheduledTime.toLocaleDateString('en-KE'),
         scheduledTime: scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })
       }
-    };
-    
-    console.log('Response agentNotification:', JSON.stringify(responseData.agentNotification, null, 2));
-    
-    res.json(responseData);
+    });
     
   } catch (error) {
     console.error('ERROR in cancel-booking:', error);
