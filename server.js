@@ -968,10 +968,18 @@ app.post('/api/cancel-booking', async (req, res) => {
       `📅 *Was scheduled for:* ${scheduledTime.toLocaleDateString('en-KE')} at ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
       `The calendar event has been removed.`;
     
+    console.log('Preparing response...');
+    console.log('Agent Phone at response time:', agentPhone);
+    console.log('Agent Phone type:', typeof agentPhone);
+    console.log('Agent Phone length:', agentPhone ? agentPhone.length : 0);
+    console.log('Agent Phone is null?', agentPhone === null);
+    console.log('Agent Phone is undefined?', agentPhone === undefined);
+    console.log('Agent Phone is empty string?', agentPhone === '');
+    
     console.log('Cancellation successful');
     console.log('========================================');
     
-    res.json({
+    const responseData = {
       success: true,
       userMessage: userMessage,
       agentNotification: {
@@ -982,7 +990,11 @@ app.post('/api/cancel-booking', async (req, res) => {
         scheduledDate: scheduledTime.toLocaleDateString('en-KE'),
         scheduledTime: scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })
       }
-    });
+    };
+    
+    console.log('Response agentNotification:', JSON.stringify(responseData.agentNotification, null, 2));
+    
+    res.json(responseData);
     
   } catch (error) {
     console.error('ERROR in cancel-booking:', error);
