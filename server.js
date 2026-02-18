@@ -865,6 +865,10 @@ app.post('/api/cancel-booking', async (req, res) => {
     
     const eventId = booking.get('Google Event ID');
     
+    // Get agent phone directly from booking (it was saved during creation)
+    let agentPhone = booking.get('Agent Phone');
+    console.log('Agent Phone from booking:', agentPhone);
+    
     // Try multiple field names for Property
     let propertyId = null;
     const possiblePropertyFields = ['Property', 'Property (from Properties)', 'Properties'];
@@ -902,18 +906,11 @@ app.post('/api/cancel-booking', async (req, res) => {
     
     // Get property details (optional - may be missing)
     let propertyName = 'the property';
-    let agentPhone = null;
     if (propertyId) {
       try {
         const property = await base('Properties').find(propertyId);
         propertyName = property.get('Property Name') || 'the property';
-        
-        // Get agent phone
-        const agentPhoneRaw = property.get('Agent Phone');
-        agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
-        
         console.log('Property:', propertyName);
-        console.log('Agent Phone:', agentPhone);
       } catch (propErr) {
         console.error('Failed to get property:', propErr.message);
       }
