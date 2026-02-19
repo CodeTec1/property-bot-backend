@@ -1289,15 +1289,22 @@ app.post('/api/handle-followup-response', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 11: Mark awaiting-followup
+// ENDPOINT 11: Mark awaiting-followup (FIXED FIELD NAME)
 // ============================================
 app.post('/api/mark-awaiting-followup', async (req, res) => {
   try {
-    const { leadId, awaiting } = req.body;
+    const { leadId, awaiting, propertyName } = req.body;
     
-    await base('Leads').update(leadId, {
+    const updateData = {
       'AwaitingFollowUpResponse': awaiting
-    });
+    };
+    
+    // If property name is provided, store it (FIXED: Use correct field name without spaces)
+    if (propertyName) {
+      updateData['LastViewedProperty'] = propertyName;
+    }
+    
+    await base('Leads').update(leadId, updateData);
     
     res.json({ success: true });
   } catch (error) {

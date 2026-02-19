@@ -24,6 +24,9 @@ async function handleMessage(input) {
       const leadName = input.lead_name || "there";
       const leadPhone = phone;
       const tenantWhatsApp = input.tenant_whatsapp || "";
+      const lastViewedProperty = input.last_viewed_property || "a property"; // Property name from last booking
+      
+      console.log('Last Viewed Property:', lastViewedProperty);
       
       if (message === '1') {
         // User is INTERESTED!
@@ -36,8 +39,11 @@ async function handleMessage(input) {
           },
           replyMessage: `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`,
           agentNotification: {
-            message: `🔥 *HOT LEAD ALERT!*\n\n${leadName} is INTERESTED after viewing!\n\n📞 Contact them ASAP: ${leadPhone}\n\nStrike while the iron is hot! 🎯`,
-            sendTo: tenantWhatsApp
+            message: `🔥 *HOT LEAD ALERT!*\n\n${leadName} is INTERESTED after viewing!\n\nProperty: ${lastViewedProperty}\n\n📞 Contact them ASAP: ${leadPhone}\n\nStrike while the iron is hot! 🎯`,
+            sendTo: tenantWhatsApp,
+            leadName: leadName,
+            leadPhone: leadPhone,
+            propertyName: lastViewedProperty
           }
         };
       } else if (message === '2') {
