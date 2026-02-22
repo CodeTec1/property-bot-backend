@@ -103,9 +103,63 @@ async function handleMessage(input) {
     }
 
     // ======================================
-    // NEW USER
+    // NEW USER - SMART WELCOME WITH CONTEXT DETECTION
     // ======================================
     if (!leadExists) {
+      // Try to detect intent from first message
+      const lowerMsg = originalMessage.toLowerCase();
+      
+      // Check if they mentioned property type
+      let detectedType = null;
+      const typesList = tenantTypes.split(',').map(t => t.trim());
+      
+      for (const type of typesList) {
+        if (lowerMsg.includes(type.toLowerCase())) {
+          detectedType = type;
+          break;
+        }
+      }
+      
+      // Check for buying keywords
+      if (!detectedType && (lowerMsg.includes('buy') || lowerMsg.includes('purchase') || lowerMsg.includes('invest'))) {
+        detectedType = typesList.find(t => t.toLowerCase().includes('buy'));
+      }
+      
+      // Check for renting keywords  
+      if (!detectedType && (lowerMsg.includes('rent') || lowerMsg.includes('lease'))) {
+        detectedType = typesList.find(t => t.toLowerCase().includes('rent'));
+      }
+      
+      // Check for land keywords
+      if (!detectedType && (lowerMsg.includes('land') || lowerMsg.includes('plot') || lowerMsg.includes('acre'))) {
+        detectedType = typesList.find(t => t.toLowerCase().includes('land'));
+      }
+      
+      // If we detected their intent, skip straight to asking name
+      if (detectedType) {
+        response.action = "create";
+        response.createLead = true;
+        response.updateFields = {
+          "Interest": detectedType,
+          "Conversation Stage": "asked_name",
+          "Status": "New",
+          "Phone": phone,
+          "Tenant": input.tenant_id
+        };
+        
+        response.replyMessage = 
+`Hi! Welcome to ${companyName} 👋
+
+I see you're interested in ${detectedType}. Great choice!
+
+What's your name?
+
+(Just type your name, e.g., Peter or Mary Jane)`;
+        
+        return response;
+      }
+      
+      // Otherwise, ask what they're looking for
       response.action = "create";
       response.createLead = true;
       response.updateFields = {
@@ -132,7 +186,7 @@ Reply with the name or number (e.g., Buy or 1).`;
     }
 
     // ======================================
-    // GREETING
+    // GREETING (RESTART FOR EXISTING USERS)
     // ======================================
     if (message.match(/^(hi|hello|hey|start|helo|restart)$/)) {
       response.action = "update";

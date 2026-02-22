@@ -1010,12 +1010,12 @@ app.post('/api/check-notifications', async (req, res) => {
       const formattedTime = startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
       
       const message = `🔔 REMINDER: Viewing Tomorrow!\n\n` +
-        `🏠 ${propertyName}\n` +
-        `📅 ${startTime.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' })}\n` +
-        `⏰ ${formattedTime}\n` +
-        `📍 ${propertyAddress}\n\n` +
-        (agentName ? `👤 Agent: ${agentName}\n` : '') +
-        (agentPhone ? `📱 ${agentPhone}\n\n` : '\n') +
+        ` ${propertyName}\n` +
+        ` ${startTime.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' })}\n` +
+        ` ${formattedTime}\n` +
+        ` ${propertyAddress}\n\n` +
+        (agentName ? ` Agent: ${agentName}\n` : '') +
+        (agentPhone ? ` ${agentPhone}\n\n` : '\n') +
         `See you there!`;
       
       const agentMessage = `🔔 *UPCOMING VIEWING REMINDER*\n\n` +
@@ -1089,8 +1089,8 @@ app.post('/api/check-notifications', async (req, res) => {
       const formattedTime = startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
       
       const message = `⏰ Your viewing starts in 1 HOUR!\n\n` +
-        `🏠 ${propertyName}\n` +
-        `📍 ${propertyAddress}\n\n` +
+        ` ${propertyName}\n` +
+        ` ${propertyAddress}\n\n` +
         `The agent is ready for you! 🎉`;
       
       const agentMessage = `🔔 *UPCOMING VIEWING REMINDER*\n\n` +
