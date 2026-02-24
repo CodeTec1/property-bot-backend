@@ -139,6 +139,7 @@ async function handleMessage(input) {
       if (detectedType) {
         response.action = "create";
         response.createLead = true;
+        response.interest = detectedType; // ← ADDED: Store for later use
         response.updateFields = {
           "Interest": detectedType,
           "Conversation Stage": "asked_name",
@@ -350,6 +351,7 @@ Just the number is fine!`;
         budget = parseFloat(budget);
       }
 
+      // Get interest from lead record (in case it was set during intent detection)
       const interest = lead.Interest || input.lead_interest;
 
       response.action = "fetch_locations";
@@ -358,7 +360,7 @@ Just the number is fine!`;
         "Conversation Stage": "fetching_locations"
       };
 
-      response.interest = interest;
+      response.interest = interest; // ← Pass the interest along!
       response.replyMessage = "Great! 💰\n\nLet me check available areas... 🔍";
 
       return response;
