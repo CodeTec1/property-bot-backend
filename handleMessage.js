@@ -30,6 +30,25 @@ async function handleMessage(input) {
       
       if (message === '1') {
         // User is INTERESTED!
+        
+        // Get agent phone from the last booking for this lead
+        let agentPhone = null;
+        try {
+          const recentBookings = await base('Bookings')
+            .select({
+              filterByFormula: `SEARCH("${leadId}", ARRAYJOIN({Lead}, ","))`,
+              sort: [{ field: 'Created', direction: 'desc' }],
+              maxRecords: 1
+            })
+            .firstPage();
+          
+          if (recentBookings.length > 0) {
+            agentPhone = recentBookings[0].get('Agent Phone');
+          }
+        } catch (err) {
+          console.error('Failed to get agent phone:', err);
+        }
+        
         return {
           action: "followup_interested",
           updateFields: {
@@ -39,8 +58,9 @@ async function handleMessage(input) {
           },
           replyMessage: `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`,
           agentNotification: {
+            agentPhone: agentPhone, // ← Agent's phone
             message: `🔥 *HOT LEAD ALERT!*\n\n${leadName} is INTERESTED after viewing!\n\nProperty: ${lastViewedProperty}\n\n📞 Contact them ASAP: ${leadPhone}\n\nStrike while the iron is hot! 🎯`,
-            sendTo: tenantWhatsApp,
+            sendTo: tenantWhatsApp, // ← For future use
             leadName: leadName,
             leadPhone: leadPhone,
             propertyName: lastViewedProperty
