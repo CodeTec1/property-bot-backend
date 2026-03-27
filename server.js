@@ -1162,23 +1162,10 @@ app.post('/api/mark-awaiting-followup', async (req, res) => {
   }
 });
 
-
 // ============================================
 // Start Server
 // ============================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Property Bot API running on port ${PORT}`);
-  console.log(`📡 Endpoints ready:`);
-  console.log(`   - POST /api/handle-message`);
-  console.log(`   - POST /api/locations`);
-  console.log(`   - POST /api/sizes`);
-  console.log(`   - POST /api/search-properties`);
-  console.log(`   - POST /api/available-slots-v2`);
-  console.log(`   - POST /api/create-booking`);
-  console.log(`   - POST /api/cancel-booking`);
-  console.log(`   - POST /api/check-notifications`);
-  console.log(`   - POST /api/mark-notification-sent`);
-  console.log(`   - POST /api/handle-followup-response`);
-  console.log(`   - POST /api/mark-awaiting-followup`);
+  console.log(`Property Bot API running on port ${PORT}`);
 });
