@@ -87,7 +87,7 @@ app.post('/api/locations', async (req, res) => {
     const { data, error } = await supabase
       .from('properties')
       .select('location')
-      .eq('tenant_id', tenantId)
+      .eq('id', tenantId)
       .eq('type', interest)
       .eq('available', true);
 
@@ -126,7 +126,7 @@ app.post('/api/sizes', async (req, res) => {
     const { data, error } = await supabase
       .from('properties')
       .select('bedrooms, plot_size, type')
-      .eq('tenant_id', tenantId)
+      .eq('id', tenantId)
       .eq('type', interest)
       .eq('location', location)
       .eq('available', true);
@@ -187,7 +187,7 @@ app.post('/api/search-properties', async (req, res) => {
     let query = supabase
       .from('properties')
       .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url')
-      .eq('tenant_id', tenantId)
+      .eq('id', tenantId)
       .eq('type', interest)
       .eq('location', location)
       .eq('available', true)
@@ -259,7 +259,7 @@ app.post('/api/available-slots-v2', async (req, res) => {
     const { data: tenant, error: tenantError } = await supabase
       .from('tenants')
       .select('*')
-      .eq('tenant_id', tenantId)
+      .eq('id', tenantId)
       .single();
 
     if (tenantError) throw tenantError;
@@ -425,7 +425,7 @@ app.post('/api/create-booking', async (req, res) => {
     const { data: tenant, error: tenantError } = await supabase
       .from('tenants')
       .select('*')
-      .eq('tenant_id', tenantId)
+      .eq('id', tenantId)
       .single();
 
     if (tenantError) throw tenantError;
