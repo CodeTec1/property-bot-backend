@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.100.1",
     "airtable": "^0.12.2",
     "body-parser": "^2.2.2",
     "dotenv": "^17.2.4",
