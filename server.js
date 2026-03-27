@@ -1,16 +1,12 @@
 // server.js - Complete Multi-Tenant Property Bot Backend
 require('dotenv').config();
 const express = require('express');
-const Airtable = require('airtable');
+const supabase = require('./supabase');
 const { google } = require('googleapis');
 const handleMessage = require('./handleMessage');
 
 const app = express();
 app.use(express.json());
-
-// Configure Airtable
-const base = new Airtable({ apiKey: process.env.AIRTABLE_API_KEY })
-  .base(process.env.AIRTABLE_BASE_ID);
 
 // Configure Google Calendar
 const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT || '{}');
@@ -80,31 +76,33 @@ app.post('/api/handle-message', async (req, res) => {
 app.post('/api/locations', async (req, res) => {
   try {
     const { tenantId, interest } = req.body;
-    
+
     if (!tenantId || !interest) {
       return res.status(400).json({ 
         success: false, 
         error: 'tenantId and interest are required' 
       });
     }
-    
-    const records = await base('Properties')
-      .select({
-        filterByFormula: `AND({TenantID} = '${tenantId}', {Type} = '${interest}', {Available} = 1)`,
-        fields: ['Location']
-      })
-      .all();
-    
-    const locations = [...new Set(records.map(r => r.get('Location')).filter(Boolean))].sort();
+
+    const { data, error } = await supabase
+      .from('properties')
+      .select('location')
+      .eq('tenant_id', tenantId)
+      .eq('type', interest)
+      .eq('available', true);
+
+    if (error) throw error;
+
+    const locations = [...new Set(data.map(r => r.location).filter(Boolean))].sort();
     const formatted = locations.map(loc => `• ${loc}`).join('\n');
-    
+
     res.json({
       success: true,
       locations: locations,
       formatted: formatted || "• No locations available",
       count: locations.length
     });
-    
+
   } catch (error) {
     console.error('Error in locations:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -117,22 +115,25 @@ app.post('/api/locations', async (req, res) => {
 app.post('/api/sizes', async (req, res) => {
   try {
     const { tenantId, interest, location } = req.body;
-    
+
     if (!tenantId || !interest || !location) {
       return res.status(400).json({ 
         success: false, 
         error: 'tenantId, interest, and location are required' 
       });
     }
-    
-    const records = await base('Properties')
-      .select({
-        filterByFormula: `AND({TenantID} = '${tenantId}', {Type} = '${interest}', {Location} = '${location}', {Available} = 1)`,
-        fields: ['Bedrooms', 'Plot Size', 'Type']
-      })
-      .all();
-    
-    if (records.length === 0) {
+
+    const { data, error } = await supabase
+      .from('properties')
+      .select('bedrooms, plot_size, type')
+      .eq('tenant_id', tenantId)
+      .eq('type', interest)
+      .eq('location', location)
+      .eq('available', true);
+
+    if (error) throw error;
+
+    if (data.length === 0) {
       return res.json({
         success: false,
         hasOptions: false,
@@ -141,28 +142,28 @@ app.post('/api/sizes', async (req, res) => {
         message: `Sorry, we don't have any ${interest.toLowerCase()} properties in ${location} right now.`
       });
     }
-    
+
     let options = '';
     let nextStage = '';
-    
+
     if (interest === 'Land') {
-      const plots = [...new Set(records.map(r => r.get('Plot Size')).filter(Boolean))];
+      const plots = [...new Set(data.map(r => r.plot_size).filter(Boolean))];
       options = plots.map(p => `• ${p}`).join('\n');
       nextStage = 'asked_land_size';
     } else {
-      const beds = [...new Set(records.map(r => parseInt(r.get('Bedrooms'))).filter(n => !isNaN(n)))].sort((a,b) => a-b);
+      const beds = [...new Set(data.map(r => parseInt(r.bedrooms)).filter(n => !isNaN(n)))].sort((a, b) => a - b);
       options = beds.map(b => `• ${b} bedroom${b > 1 ? 's' : ''}`).join('\n');
       nextStage = 'asked_size';
     }
-    
+
     res.json({
       success: true,
       hasOptions: true,
       options: options,
       nextStage: nextStage,
-      count: records.length
+      count: data.length
     });
-    
+
   } catch (error) {
     console.error('Error in sizes:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -170,202 +171,123 @@ app.post('/api/sizes', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT 4: Search Properties (WITH DEBUG LOGGING)
+// ENDPOINT 4: Search Properties
 // ============================================
 app.post('/api/search-properties', async (req, res) => {
   try {
-    const { tenantId, interest, location, bedrooms, plotSize, budget } = req.body;
-    
-    console.log('========================================');
-    console.log('PROPERTY SEARCH REQUEST:');
-    console.log('Input data:', JSON.stringify(req.body, null, 2));
-    console.log('tenantId:', tenantId);
-    console.log('interest:', interest);
-    console.log('location:', location);
-    console.log('bedrooms:', bedrooms, typeof bedrooms);
-    console.log('plotSize:', plotSize, typeof plotSize);
-    console.log('budget:', budget);
-    
+    const { tenantId, interest, location, bedrooms, plotSize } = req.body;
+
     if (!tenantId || !interest || !location) {
-      console.log('ERROR: Missing required fields');
       return res.status(400).json({ 
         success: false, 
         error: 'tenantId, interest, and location are required' 
       });
     }
-    
-    // Build filter - Match on Type, Location, Size, Available ONLY (no budget!)
-    let filter;
-    
-    console.log('Building filter for interest:', interest);
-    
+
+    let query = supabase
+      .from('properties')
+      .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url')
+      .eq('tenant_id', tenantId)
+      .eq('type', interest)
+      .eq('location', location)
+      .eq('available', true)
+      .order('price', { ascending: true })
+      .limit(3);
+
     if (interest === 'Land') {
-      console.log('LAND SEARCH - Using plotSize:', plotSize);
-      // Land search - flexible matching for plot size (strips spaces, case insensitive)
-      // Matches: "1/4" → "1/4 Acre", "50x100" → "50 x 100", etc.
       const cleanPlotSize = plotSize.replace(/\s+/g, '').toLowerCase();
-      console.log('Cleaned plot size for search:', cleanPlotSize);
-      
-      filter = `AND(
-        {Type} = "Land",
-        {Location} = "${location}",
-        FIND("${cleanPlotSize}", LOWER(SUBSTITUTE({Plot Size}, " ", ""))),
-        {Available} = TRUE(),
-        SEARCH("${tenantId}", ARRAYJOIN({TenantID}))
-      )`;
+      query = query.ilike('plot_size', `%${cleanPlotSize}%`);
     } else {
-      console.log('HOUSE SEARCH - Using bedrooms:', bedrooms);
-      // House/Apartment search
       let bedroomNumber = bedrooms;
       if (typeof bedrooms === 'string') {
         const match = bedrooms.match(/\d+/);
-        bedroomNumber = match ? parseInt(match[0]) : bedrooms;
+        bedroomNumber = match ? parseInt(match[0]) : null;
       }
-      
-      console.log('Extracted bedroom number:', bedroomNumber);
-      
-      filter = `AND(
-        {Type} = "${interest}",
-        {Bedrooms} = ${parseInt(bedroomNumber)},
-        {Location} = "${location}",
-        {Available} = TRUE(),
-        SEARCH("${tenantId}", ARRAYJOIN({TenantID}))
-      )`;
+      query = query.eq('bedrooms', parseInt(bedroomNumber));
     }
-    
-    // NO BUDGET FILTER! Just return all matching properties sorted by price
-    
-    console.log('FINAL FILTER:');
-    console.log(filter);
-    console.log('========================================');
-    
-    const records = await base('Properties')
-      .select({
-        filterByFormula: filter,
-        maxRecords: 3, // Return up to 10 properties (not limited by budget anymore)
-        sort: [{ field: 'Price', direction: 'asc' }], // Cheapest first!
-        fields: ['Property Name', 'Price', 'Bedrooms', 'Location', 'Address', 'Plot Size', 'Type', 'Photo URL']
-      })
-      .all();
-    
-    console.log('Airtable returned', records.length, 'records');
-    
-    if (records.length > 0) {
-      console.log('First record:', {
-        id: records[0].id,
-        name: records[0].get('Property Name'),
-        price: records[0].get('Price'),
-        type: records[0].get('Type'),
-        location: records[0].get('Location'),
-        bedrooms: records[0].get('Bedrooms'),
-        plotSize: records[0].get('Plot Size')
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    if (data.length === 0) {
+      return res.json({
+        success: false,
+        properties: [],
+        count: 0,
+        message: `Sorry, no ${interest.toLowerCase()} properties found in ${location} matching your criteria.`
       });
-    } else {
-      console.log('NO RECORDS FOUND!');
-      console.log('Filter used:', filter);
     }
-    
-    // Sort again to be absolutely sure (Airtable sometimes doesn't respect sort)
-    const sortedRecords = records.sort((a, b) => {
-      const priceA = a.get('Price') || 0;
-      const priceB = b.get('Price') || 0;
-      return priceA - priceB;
-    });
-    
-    console.log('After sorting, order is:');
-    sortedRecords.forEach((r, i) => {
-      console.log(`  ${i+1}. ${r.get('Property Name')} - ${r.get('Price')}`);
-    });
-    
-    const properties = sortedRecords.map((record, index) => ({
+
+    const properties = data.map((record, index) => ({
       number: index + 1,
       id: record.id,
-      name: record.get('Property Name'),
-      price: record.get('Price'),
-      bedrooms: record.get('Bedrooms'),
-      location: record.get('Location'),
-      address: record.get('Address'),
-      plotSize: record.get('Plot Size'),
-      type: record.get('Type'),
-      photoUrl: record.get('Photo URL') || ''
+      name: record.property_name,
+      price: record.price,
+      bedrooms: record.bedrooms,
+      location: record.location,
+      address: record.address,
+      plotSize: record.plot_size,
+      type: record.type,
+      photoUrl: record.photo_url || ''
     }));
-    
-    console.log('RESPONSE:');
-    console.log('Returning', properties.length, 'properties');
-    console.log('Properties:', JSON.stringify(properties, null, 2));
-    console.log('========================================');
-    
+
     res.json({
       success: true,
       properties: properties,
       count: properties.length
     });
-    
+
   } catch (error) {
-    console.error('ERROR in search-properties:', error);
-    console.error('Stack:', error.stack);
+    console.error('Error in search-properties:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ============================================
-// ENDPOINT 5: Get Available Slots - FINAL FIXED VERSION
+// ENDPOINT 5: Get Available Slots
 // ============================================
 app.post('/api/available-slots-v2', async (req, res) => {
   try {
-    const { propertyId, leadId, tenantId } = req.body;
-    
-    console.log('========================================');
-    console.log('SLOT CALCULATION REQUEST:');
-    console.log('propertyId:', propertyId);
-    console.log('tenantId:', tenantId);
-    
+    const { propertyId, tenantId } = req.body;
+
     if (!propertyId || !tenantId) {
       return res.status(400).json({ success: false, error: 'propertyId and tenantId required' });
     }
-    
+
     // 1. GET TENANT CONFIG
-    const tenant = await base('Tenants').find(tenantId);
-    
-    const calendarId = tenant.get('Google Calendar ID');
-    const workStart = parseInt(tenant.get('Work Start Hour') || 9);
-    const workEnd = parseInt(tenant.get('Work End Hour') || 17);
-    const slotDuration = parseInt(tenant.get('Slot Duration') || 60);
-    const workingDaysRaw = tenant.get('Working Days') || "Monday, Tuesday, Wednesday, Thursday, Friday";
-    const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
-    const daysAhead = parseInt(tenant.get('Days Ahead') || 30);
-    
-    // Normalize working days
-    let workingDaysStr;
-    if (Array.isArray(workingDaysRaw)) {
-      const dayMap = {
-        'Mon': 'Monday', 'Tue': 'Tuesday', 'Wed': 'Wednesday',
-        'Thu': 'Thursday', 'Fri': 'Friday', 'Sat': 'Saturday', 'Sun': 'Sunday'
-      };
-      workingDaysStr = workingDaysRaw.map(d => dayMap[d] || d).join(', ');
-    } else {
-      workingDaysStr = workingDaysRaw
-        .replace(/\bMon\b/g, 'Monday').replace(/\bTue\b/g, 'Tuesday')
-        .replace(/\bWed\b/g, 'Wednesday').replace(/\bThu\b/g, 'Thursday')
-        .replace(/\bFri\b/g, 'Friday').replace(/\bSat\b/g, 'Saturday')
-        .replace(/\bSun\b/g, 'Sunday');
-    }
-    
-    console.log('CONFIG:');
-    console.log('  Work: ', workStart + ':00 -', workEnd + ':00');
-    console.log('  Duration:', slotDuration, 'min');
-    console.log('  Days:', workingDaysStr);
-    console.log('  Timezone:', timezone);
-    
+    const { data: tenant, error: tenantError } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .single();
+
+    if (tenantError) throw tenantError;
+
+    const calendarId = tenant.google_calendar_id;
+    const workStart = parseInt(tenant.work_start_hour || 9);
+    const workEnd = parseInt(tenant.work_end_hour || 17);
+    const slotDuration = parseInt(tenant.slot_duration || 60);
+    const timezone = tenant.timezone || 'Africa/Nairobi';
+    const daysAhead = parseInt(tenant.days_ahead || 30);
+    const workingDaysStr = tenant.working_days || 'Monday, Tuesday, Wednesday, Thursday, Friday';
+
     // 2. GET PROPERTY
-    const propertyRecord = await base('Properties').find(propertyId);
-    const propertyName = propertyRecord.get('Property Name');
-    
-    // 3. GET BOOKED EVENTS
+    const { data: property, error: propertyError } = await supabase
+      .from('properties')
+      .select('property_name')
+      .eq('id', propertyId)
+      .single();
+
+    if (propertyError) throw propertyError;
+
+    const propertyName = property.property_name;
+
+    // 3. GET BOOKED EVENTS FROM GOOGLE CALENDAR
     const now = new Date();
     const searchEnd = new Date(now);
     searchEnd.setDate(searchEnd.getDate() + daysAhead);
-    
+
     const calendarResponse = await calendar.events.list({
       calendarId: calendarId,
       timeMin: now.toISOString(),
@@ -374,127 +296,94 @@ app.post('/api/available-slots-v2', async (req, res) => {
       singleEvents: true,
       orderBy: 'startTime'
     });
-    
+
     const booked = (calendarResponse.data.items || []).map(e => ({
       start: new Date(e.start.dateTime || e.start.date),
       end: new Date(e.end.dateTime || e.end.date)
     }));
-    
-    console.log('Booked events:', booked.length);
-    
-    // 4. GENERATE SLOTS
-    const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000)); // 1hr buffer
+
+    // 4. GENERATE FREE SLOTS
+    const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000));
     const freeSlots = [];
     const MAX_SLOTS = 7;
-    
+    const KENYA_OFFSET_HOURS = 3;
+
     function overlaps(start, end) {
       return booked.some(b => start < b.end && end > b.start);
     }
-    
+
     function isWorkingDay(d) {
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       return workingDaysStr.includes(dayNames[d.getDay()]);
     }
-    
-    console.log('Generating slots...');
-    
+
     for (let dayOffset = 0; dayOffset < daysAhead && freeSlots.length < MAX_SLOTS; dayOffset++) {
       const day = new Date(now);
       day.setDate(day.getDate() + dayOffset);
       day.setHours(0, 0, 0, 0);
-      
-      if (!isWorkingDay(day)) {
-        continue; // Skip non-working days silently
-      }
-      
-      const dayStr = day.toLocaleDateString('en-KE', { timeZone: timezone });
-      console.log(`Checking ${dayStr}...`);
-      
-      // Get timezone offset (Kenya is UTC+3)
-      const KENYA_OFFSET_HOURS = 3;
-      
-      // Generate slots for this day
-      for (let hour = workStart; hour < workEnd && freeSlots.length < MAX_SLOTS; ) {
-        // Create slot start - adjust for Kenya timezone
-        // If we want 9am in Kenya (UTC+3), that's 6am UTC
+
+      if (!isWorkingDay(day)) continue;
+
+      for (let hour = workStart; hour < workEnd && freeSlots.length < MAX_SLOTS;) {
         const slotStart = new Date(day);
         slotStart.setUTCHours(hour - KENYA_OFFSET_HOURS, 0, 0, 0);
-        
-        // Create slot end
+
         const slotEnd = new Date(slotStart);
         slotEnd.setMinutes(slotEnd.getMinutes() + slotDuration);
-        
-        // Display in Kenya time
-        const startStr = slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
-        const endStr = slotEnd.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
-        
-        console.log(`  ${hour}:00 Kenya → UTC ${slotStart.getUTCHours()}:00 → displays as ${startStr}`);
-        
+
         // Skip if in the past
         if (slotStart <= minSlotTime) {
-          console.log(`  ${startStr}: PAST`);
-          hour++; // Move to next hour
+          hour++;
           continue;
         }
-        
-        // Skip if end time goes beyond work hours
+
+        // Skip if beyond work hours
         const endHour = slotEnd.getHours();
         const endMinute = slotEnd.getMinutes();
-        if (endHour > workEnd || (endHour === workEnd && endMinute > 0)) {
-          console.log(`  ${startStr}: END (${endStr}) beyond work hours`);
-          break; // No more slots today
-        }
-        
-        // Skip if overlaps
+        if (endHour > workEnd || (endHour === workEnd && endMinute > 0)) break;
+
+        // Skip if overlaps with booked event
         if (overlaps(slotStart, slotEnd)) {
-          console.log(`  ${startStr}: BOOKED`);
-          hour++; // Move to next hour
+          hour++;
           continue;
         }
-        
-        // FREE SLOT!
-        console.log(`  ${startStr} - ${endStr}: ✅ FREE`);
-        
+
+        // FREE SLOT
         freeSlots.push({
           number: freeSlots.length + 1,
           start: slotStart.toISOString(),
           end: slotEnd.toISOString(),
-          displayDate: slotStart.toLocaleDateString('en-KE', { 
+          displayDate: slotStart.toLocaleDateString('en-KE', {
             timeZone: timezone,
-            weekday: 'short', 
-            month: 'short', 
-            day: 'numeric' 
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric'
           }),
-          displayTime: slotStart.toLocaleTimeString('en-KE', { 
+          displayTime: slotStart.toLocaleTimeString('en-KE', {
             timeZone: timezone,
-            hour: 'numeric', 
+            hour: 'numeric',
             minute: '2-digit',
-            hour12: true 
+            hour12: true
           })
         });
-        
-        // Move to next slot based on duration
-        const nextHour = Math.floor((hour * 60 + slotDuration) / 60);
-        hour = nextHour;
+
+        hour = Math.floor((hour * 60 + slotDuration) / 60);
       }
     }
-    
-    console.log('Found', freeSlots.length, 'free slots');
-    console.log('========================================');
-    
+
     // 5. CREATE SLOT MAP
     const slotMap = {};
     freeSlots.forEach(slot => {
       slotMap[slot.number] = `${slot.start}|${slot.end}`;
     });
-    
-    // 6. RETURN
+
+    // 6. RETURN RESPONSE
     const message = freeSlots.length > 0
-      ? `📅 Available viewings:\n\n` + 
+      ? `📅 Available viewings:\n\n` +
         freeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
         `\n\nReply with slot number.`
       : `No available slots in the next ${daysAhead} days.\n\nOur agent will contact you!`;
-    
+
     res.json({
       success: true,
       slots: freeSlots,
@@ -503,61 +392,49 @@ app.post('/api/available-slots-v2', async (req, res) => {
       count: freeSlots.length,
       propertyName: propertyName
     });
-    
+
   } catch (error) {
-    console.error('ERROR:', error);
+    console.error('Error in available-slots-v2:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ============================================
-// ENDPOINT 6: Create Booking - PRODUCTION VERSION
+// ENDPOINT 6: Create Booking
 // ============================================
 app.post('/api/create-booking', async (req, res) => {
   try {
-    const { 
-      leadId, 
-      propertyId, 
-      slotNumber, 
-      slotMap, 
-      leadName, 
-      leadPhone,
-      tenantId
-    } = req.body;
-    
-    console.log('========================================');
-    console.log('CREATE BOOKING REQUEST:');
-    console.log('Input data:', JSON.stringify(req.body, null, 2));
-    
-    // Validate
+    const { leadId, propertyId, slotNumber, slotMap, leadName, leadPhone, tenantId } = req.body;
+
+    // Validate required fields
     const missingFields = [];
     if (!leadId) missingFields.push('leadId');
     if (!propertyId) missingFields.push('propertyId');
     if (!slotNumber) missingFields.push('slotNumber');
     if (!slotMap) missingFields.push('slotMap');
     if (!tenantId) missingFields.push('tenantId');
-    
+
     if (missingFields.length > 0) {
-      console.log('ERROR: Missing fields:', missingFields.join(', '));
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         error: 'Missing required fields: ' + missingFields.join(', ')
       });
     }
-    
+
     // 1. GET TENANT CONFIG
-    console.log('Fetching tenant config...');
-    const tenant = await base('Tenants').find(tenantId);
-    
-    const calendarId = tenant.get('Google Calendar ID');
-    const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
-    const slotDuration = parseInt(tenant.get('Slot Duration') || 60);
-    const companyName = tenant.get('Company Name');
-    
-    console.log('Tenant:', companyName);
-    console.log('Calendar ID:', calendarId);
-    console.log('Timezone:', timezone);
-    
+    const { data: tenant, error: tenantError } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .single();
+
+    if (tenantError) throw tenantError;
+
+    const calendarId = tenant.google_calendar_id;
+    const timezone = tenant.timezone || 'Africa/Nairobi';
+    const slotDuration = parseInt(tenant.slot_duration || 60);
+    const companyName = tenant.company_name;
+
     // 2. PARSE SLOT MAP
     let slots = slotMap;
     if (typeof slotMap === 'string') {
@@ -567,26 +444,20 @@ app.post('/api/create-booking', async (req, res) => {
         return res.status(400).json({ success: false, error: 'Invalid slot map format' });
       }
     }
-    
+
     const slotData = slots[slotNumber];
     if (!slotData || !slotData.includes('|')) {
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         error: 'Invalid slot number. Available: ' + Object.keys(slots).join(', ')
       });
     }
-    
+
     const [startTime, endTime] = slotData.split('|');
     const slotStart = new Date(startTime);
     const slotEnd = new Date(endTime);
-    
-    console.log('Selected slot:');
-    console.log('  Start:', slotStart.toLocaleString('en-KE', { timeZone: timezone }));
-    console.log('  End:', slotEnd.toLocaleString('en-KE', { timeZone: timezone }));
-    
-    // 3. COLLISION DETECTION - Check if slot is still available
-    console.log('Checking for conflicts in database...');
-    
+
+    // 3. COLLISION DETECTION
     // Check Google Calendar
     const calendarConflicts = await calendar.events.list({
       calendarId: calendarId,
@@ -595,187 +466,137 @@ app.post('/api/create-booking', async (req, res) => {
       q: propertyId,
       singleEvents: true
     });
-    
+
     const calendarHasConflict = calendarConflicts.data.items && calendarConflicts.data.items.length > 0;
-    
-    // Also check Airtable Bookings table directly
-    const airtableConflicts = await base('Bookings')
-      .select({
-        filterByFormula: `AND(
-          SEARCH("${propertyId}", ARRAYJOIN({Property})),
-          {Status} != "Cancelled",
-          OR(
-            AND(
-              IS_BEFORE({StartDateTime}, "${slotEnd.toISOString()}"),
-              IS_AFTER({EndDateTime}, "${slotStart.toISOString()}")
-            )
-          )
-        )`,
-        maxRecords: 1
-      })
-      .all();
-    
-    const airtableHasConflict = airtableConflicts.length > 0;
-    
-    console.log('Calendar conflicts:', calendarHasConflict ? 'YES' : 'NO');
-    console.log('Airtable conflicts:', airtableHasConflict ? 'YES' : 'NO');
-    
-    if (calendarHasConflict || airtableHasConflict) {
-      console.log('SLOT TAKEN! Cannot book.');
+
+    // Check Supabase bookings table
+    const { data: conflictingBookings, error: conflictError } = await supabase
+      .from('bookings')
+      .select('id')
+      .eq('property_id', propertyId)
+      .neq('status', 'Cancelled')
+      .lt('start_datetime', slotEnd.toISOString())
+      .gt('end_datetime', slotStart.toISOString())
+      .limit(1);
+
+    if (conflictError) throw conflictError;
+
+    const supabaseHasConflict = conflictingBookings.length > 0;
+
+    if (calendarHasConflict || supabaseHasConflict) {
       return res.json({
         success: false,
         slotTaken: true,
-        message: "⚠️ Sorry, that time slot was just taken by another client!\n\nPlease select another time or reply HI to search again."
+        message: "Sorry, that time slot was just taken by another client.\n\nPlease select another time or reply HI to search again."
       });
     }
-    
-    console.log('Slot is FREE! Proceeding with booking...');
-    
-    // 4. GET PROPERTY DETAILS
-    const propertyRecord = await base('Properties').find(propertyId);
-    const propertyName = propertyRecord.get('Property Name');
-    const propertyAddress = propertyRecord.get('Address');
-    const agentEmailRaw = propertyRecord.get('Agent Email');
-    const agentPhoneRaw = propertyRecord.get('Agent Phone');
-    const agentNameRaw = propertyRecord.get('Agent Name');
-    
-    console.log('Property:', propertyName);
-    console.log('Agent data (raw):');
-    console.log('  Name:', agentNameRaw, '(type:', typeof agentNameRaw, ')');
-    console.log('  Phone:', agentPhoneRaw, '(type:', typeof agentPhoneRaw, ')');
-    console.log('  Email:', agentEmailRaw, '(type:', typeof agentEmailRaw, ')');
-    
-    // Handle lookups (they return arrays)
-    const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
-    const agentPhoneRaw2 = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
-    const agentEmail = Array.isArray(agentEmailRaw) ? agentEmailRaw[0] : agentEmailRaw;
-    
-    // Clean phone number - Airtable phone fields are picky
-    let agentPhone = agentPhoneRaw2;
-    if (agentPhone) {
-      // Convert to string and trim
-      agentPhone = agentPhone.toString().trim();
-      // Remove any extra formatting that might cause issues
-      agentPhone = agentPhone.replace(/[^\d+\s()-]/g, '');
-    }
-    
-    console.log('Agent data (cleaned):');
-    console.log('  Name:', agentName);
-    console.log('  Phone (original):', agentPhoneRaw2);
-    console.log('  Phone (cleaned):', agentPhone);
-    console.log('  Email:', agentEmail);
-    
-    // In the create booking endpoint, find this section and replace it:
 
-// 5. CREATE GOOGLE CALENDAR EVENT
-console.log('Creating calendar event...');
+    // 4. GET PROPERTY AND AGENT DETAILS
+    const { data: property, error: propertyError } = await supabase
+      .from('properties')
+      .select(`
+        property_name,
+        address,
+        agents (
+          agent_name,
+          phone,
+          email
+        )
+      `)
+      .eq('id', propertyId)
+      .single();
 
-const event = {
-  summary: `${companyName} - Property Viewing`,
-  description: `Property: ${propertyName}\nClient: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}\n\nAgent: ${agentName || 'N/A'}\nAgent Phone: ${agentPhone || 'N/A'}`,
-  location: propertyAddress,
-  start: {
-    dateTime: slotStart.toISOString(),
-    timeZone: timezone
-  },
-  end: {
-    dateTime: slotEnd.toISOString(),
-    timeZone: timezone
-  },
-};
+    if (propertyError) throw propertyError;
 
-let calendarEvent;
-try {
-  calendarEvent = await calendar.events.insert({
-    calendarId: calendarId,
-    resource: event
-    // REMOVED: sendUpdates: 'all' (can't send updates without attendees)
-  });
-  console.log('Calendar event created:', calendarEvent.data.id);
-} catch (calErr) {
-  console.error('Calendar creation failed:', calErr.message);
-  return res.status(500).json({ 
-    success: false, 
-    error: 'Failed to create calendar event: ' + calErr.message 
-  });
-}
-    
-    // 6. CREATE AIRTABLE BOOKING
-    console.log('Creating Airtable booking...');
-    
-    const bookingData = {
-      'Lead': [leadId],
-      'Property': [propertyId],
-      'StartDateTime': slotStart.toISOString(),
-      'EndDateTime': slotEnd.toISOString(),
-      'Date': slotStart.toISOString().split('T')[0], // ISO format: 2026-02-13
-      'Time': slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }),
-      'Status': 'Scheduled',
-      'Google Event ID': calendarEvent.data.id,
-      'Tenant': [tenantId]
+    const propertyName = property.property_name;
+    const propertyAddress = property.address;
+    const agentName = property.agents?.agent_name || null;
+    const agentPhone = property.agents?.phone || null;
+    const agentEmail = property.agents?.email || null;
+
+    // 5. CREATE GOOGLE CALENDAR EVENT
+    const event = {
+      summary: `${companyName} - Property Viewing`,
+      description: `Property: ${propertyName}\nClient: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}\n\nAgent: ${agentName || 'N/A'}\nAgent Phone: ${agentPhone || 'N/A'}`,
+      location: propertyAddress,
+      start: {
+        dateTime: slotStart.toISOString(),
+        timeZone: timezone
+      },
+      end: {
+        dateTime: slotEnd.toISOString(),
+        timeZone: timezone
+      }
     };
-    
-    // Add agent fields only if they exist (they might be empty)
-    if (agentName) {
-      bookingData['Agent Name'] = agentName.toString(); // Ensure it's a string
-    }
-    if (agentPhone) {
-      bookingData['Agent Phone'] = agentPhone.toString(); // Ensure it's a string
-    }
-    
-    console.log('Booking data:', JSON.stringify(bookingData, null, 2));
-    
-    let bookingRecord;
+
+    let calendarEvent;
     try {
-      bookingRecord = await base('Bookings').create(bookingData);
-      console.log('Booking created:', bookingRecord.id);
-    } catch (airtableErr) {
-      console.error('Airtable booking failed:', airtableErr.message);
-      // Cleanup calendar event
-      try {
-        await calendar.events.delete({
-          calendarId: calendarId,
-          eventId: calendarEvent.data.id
-        });
-        console.log('Calendar event deleted (cleanup)');
-      } catch {}
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Failed to create booking: ' + airtableErr.message 
+      calendarEvent = await calendar.events.insert({
+        calendarId: calendarId,
+        resource: event
+      });
+    } catch (calErr) {
+      console.error('Calendar creation failed:', calErr.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to create calendar event: ' + calErr.message
       });
     }
-    
+
+    // 6. CREATE SUPABASE BOOKING
+    const { data: bookingRecord, error: bookingError } = await supabase
+      .from('bookings')
+      .insert({
+        lead_id: leadId,
+        property_id: propertyId,
+        tenant_id: tenantId,
+        start_datetime: slotStart.toISOString(),
+        end_datetime: slotEnd.toISOString(),
+        date: slotStart.toISOString().split('T')[0],
+        time: slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }),
+        status: 'Scheduled',
+        google_event_id: calendarEvent.data.id,
+        agent_name: agentName || null,
+        agent_phone: agentPhone || null
+      })
+      .select()
+      .single();
+
+    if (bookingError) {
+      // Cleanup calendar event if booking fails
+      await calendar.events.delete({
+        calendarId: calendarId,
+        eventId: calendarEvent.data.id
+      });
+      throw bookingError;
+    }
+
     // 7. FORMAT MESSAGES
-    const slotDurationMinutes = slotDuration;
-    const durationText = slotDurationMinutes >= 60 
-      ? `${Math.floor(slotDurationMinutes / 60)} hour${slotDurationMinutes > 60 ? 's' : ''}`
-      : `${slotDurationMinutes} minutes`;
-    
-    const confirmMessage = `✅ *VIEWING CONFIRMED!*\n\n` +
-      `*Booking Details:*\n` +
+    const durationText = slotDuration >= 60
+      ? `${Math.floor(slotDuration / 60)} hour${slotDuration > 60 ? 's' : ''}`
+      : `${slotDuration} minutes`;
+
+    const confirmMessage =
+      `✅ Viewing Confirmed!\n\n` +
       `Property: ${propertyName}\n` +
       `Date: ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric' })}\n` +
       `Time: ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
-      `*Location:* ${propertyAddress}\n\n` +
-      (agentName ? `👤 *Agent:* ${agentName}\n` : '') +
-      (agentPhone ? `📱 *Agent Phone:* ${agentPhone}\n\n` : '\n') +
+      `Location: ${propertyAddress}\n\n` +
+      (agentName ? `Agent: ${agentName}\n` : '') +
+      (agentPhone ? `Agent Phone: ${agentPhone}\n\n` : '\n') +
       `See you there! Reply CANCEL if you need to cancel.`;
-    
-    const agentMessage = `🔔 *NEW VIEWING SCHEDULED*\n\n` +
-      `📋 *CLIENT:*\n` +
-      `${leadName}\n` +
-      `${leadPhone}\n\n` +
-      `🏠 *PROPERTY:*\n` +
-      `${propertyName}\n` +
-      `${propertyAddress}\n\n` +
-      `📅 ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
-      `⏰ ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
-      `⏱️ Duration: ${durationText}\n\n` +
-      `✅ Added to your calendar`;
-    
-    console.log('BOOKING SUCCESSFUL!');
-    console.log('========================================');
-    
+
+    const agentMessage =
+      `New Viewing Scheduled\n\n` +
+      `Client: ${leadName}\n` +
+      `Phone: ${leadPhone}\n\n` +
+      `Property: ${propertyName}\n` +
+      `Address: ${propertyAddress}\n\n` +
+      `Date: ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
+      `Time: ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
+      `Duration: ${durationText}\n\n` +
+      `Added to your calendar.`;
+
     res.json({
       success: true,
       slotTaken: false,
@@ -793,71 +614,59 @@ try {
         address: propertyAddress
       }
     });
-    
+
   } catch (error) {
-    console.error('ERROR in create-booking:', error);
-    console.error('Stack:', error.stack);
+    console.error('Error in create-booking:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ============================================
-// ENDPOINT 7: Cancel Booking - COMPLETELY FIXED
+// ENDPOINT 7: Cancel Booking
 // ============================================
 app.post('/api/cancel-booking', async (req, res) => {
   try {
     const { leadId, calendarId } = req.body;
-    
+
     if (!leadId || !calendarId) {
       return res.status(400).json({ success: false, error: 'leadId and calendarId required' });
     }
-    
-    // Search for active bookings for this lead - Get all and filter in JS
-    const allScheduled = await base('Bookings')
-      .select({
-        filterByFormula: `{Status} = "Scheduled"`,
-        sort: [{ field: 'StartDateTime', direction: 'desc' }]
-      })
-      .all();
-    
-    // Filter in JavaScript (more reliable than Airtable formulas for linked fields)
-    const bookings = allScheduled.filter(booking => {
-      const leadField = booking.get('Lead');
-      // Handle both array and non-array cases
-      if (Array.isArray(leadField)) {
-        return leadField.includes(leadId);
-      }
-      return leadField === leadId;
-    });
-    
-    if (bookings.length === 0) {
+
+    // 1. FIND ACTIVE BOOKING FOR THIS LEAD
+    const { data: bookings, error: bookingError } = await supabase
+      .from('bookings')
+      .select(`
+        id,
+        google_event_id,
+        start_datetime,
+        property_id,
+        properties (
+          property_name,
+          address,
+          agents (
+            agent_name,
+            phone
+          )
+        )
+      `)
+      .eq('lead_id', leadId)
+      .eq('status', 'Scheduled')
+      .order('start_datetime', { ascending: false })
+      .limit(1);
+
+    if (bookingError) throw bookingError;
+
+    if (!bookings || bookings.length === 0) {
       return res.json({
         success: false,
         noBooking: true,
-        message: "You don't have any active bookings to cancel.\n\nReply HI to search for properties! 🏡"
+        message: "You don't have any active bookings to cancel.\n\nReply HI to search for properties."
       });
     }
-    
+
     const booking = bookings[0];
-    
-    const eventId = booking.get('Google Event ID');
-    
-    // Try multiple field names for Property
-    let propertyId = null;
-    const possiblePropertyFields = ['Property', 'Property (from Properties)', 'Properties'];
-    
-    for (const fieldName of possiblePropertyFields) {
-      try {
-        const value = booking.get(fieldName);
-        if (value) {
-          propertyId = Array.isArray(value) ? value[0] : value;
-          break;
-        }
-      } catch (e) {
-        // Field doesn't exist, continue
-      }
-    }
-    
+    const eventId = booking.google_event_id;
+
     if (!eventId) {
       return res.json({
         success: false,
@@ -865,40 +674,23 @@ app.post('/api/cancel-booking', async (req, res) => {
         message: "Booking found but no calendar event to delete."
       });
     }
-    
-    // Get property details
-    let propertyName = 'the property';
-    let agentPhone = null;
-    
-    if (propertyId) {
-      try {
-        const property = await base('Properties').find(propertyId);
-        propertyName = property.get('Property Name') || 'the property';
-        
-        // Get agent phone from lookup field
-        const agentPhoneRaw = property.get('Agent Phone');
-        if (Array.isArray(agentPhoneRaw) && agentPhoneRaw.length > 0) {
-          agentPhone = agentPhoneRaw[0];
-        } else if (agentPhoneRaw && typeof agentPhoneRaw === 'string') {
-          agentPhone = agentPhoneRaw;
-        }
-      } catch (propErr) {
-        console.error('Failed to get property:', propErr.message);
-      }
-    }
-    
-    // Get lead details
-    let leadName = 'there';
-    try {
-      const lead = await base('Leads').find(leadId);
-      leadName = lead.get('Name') || 'there';
-    } catch (leadErr) {
-      console.error('Failed to get lead:', leadErr.message);
-    }
-    
-    const scheduledTime = new Date(booking.get('StartDateTime'));
-    
-    // Delete Google Calendar event
+
+    const propertyName = booking.properties?.property_name || 'the property';
+    const agentPhone = booking.properties?.agents?.phone || null;
+    const scheduledTime = new Date(booking.start_datetime);
+
+    // 2. GET LEAD NAME
+    const { data: lead, error: leadError } = await supabase
+      .from('leads')
+      .select('name')
+      .eq('id', leadId)
+      .single();
+
+    if (leadError) throw leadError;
+
+    const leadName = lead.name || 'there';
+
+    // 3. DELETE GOOGLE CALENDAR EVENT
     try {
       await calendar.events.delete({
         calendarId: calendarId,
@@ -907,32 +699,40 @@ app.post('/api/cancel-booking', async (req, res) => {
     } catch (calErr) {
       console.error('Calendar deletion error:', calErr.message);
     }
-    
-    // Update booking status
-    await base('Bookings').update(booking.id, {
-      'Status': 'Cancelled'
-    });
-    
-    // Update lead conversation stage
-    await base('Leads').update(leadId, {
-      'Conversation Stage': 'booking_cancelled'
-      // Removed: Status update (might not have "Cancelled" option in Leads table)
-    });
-    
-    const userMessage = `❌ *Viewing Cancelled*\n\n` +
+
+    // 4. UPDATE BOOKING STATUS IN SUPABASE
+    const { error: updateBookingError } = await supabase
+      .from('bookings')
+      .update({ status: 'Cancelled' })
+      .eq('id', booking.id);
+
+    if (updateBookingError) throw updateBookingError;
+
+    // 5. UPDATE LEAD CONVERSATION STAGE
+    const { error: updateLeadError } = await supabase
+      .from('leads')
+      .update({ conversation_stage: 'booking_cancelled' })
+      .eq('id', leadId);
+
+    if (updateLeadError) throw updateLeadError;
+
+    // 6. FORMAT MESSAGES
+    const userMessage =
+      `Viewing Cancelled\n\n` +
       `Your viewing has been cancelled:\n\n` +
-      `🏠 *Property:* ${propertyName}\n` +
-      `📅 *Was scheduled for:* ${scheduledTime.toLocaleDateString('en-KE')}\n` +
-      `⏰ *Time:* ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
-      `If you'd like to reschedule, reply *HI* to start over.`;
-    
-    const agentMessage = `🔔 *VIEWING CANCELLED*\n\n` +
+      `Property: ${propertyName}\n` +
+      `Was scheduled for: ${scheduledTime.toLocaleDateString('en-KE')}\n` +
+      `Time: ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
+      `If you'd like to reschedule, reply HI to start over.`;
+
+    const agentMessage =
+      `Viewing Cancelled\n\n` +
       `A viewing has been cancelled.\n\n` +
-      `👤 *Client:* ${leadName}\n` +
-      `🏠 *Property:* ${propertyName}\n` +
-      `📅 *Was scheduled for:* ${scheduledTime.toLocaleDateString('en-KE')} at ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
+      `Client: ${leadName}\n` +
+      `Property: ${propertyName}\n` +
+      `Was scheduled for: ${scheduledTime.toLocaleDateString('en-KE')} at ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
       `The calendar event has been removed.`;
-    
+
     res.json({
       success: true,
       userMessage: userMessage,
@@ -945,93 +745,97 @@ app.post('/api/cancel-booking', async (req, res) => {
         scheduledTime: scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })
       }
     });
-    
+
   } catch (error) {
-    console.error('ERROR in cancel-booking:', error);
+    console.error('Error in cancel-booking:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ============================================
-// ENDPOINT 8: Check Reminders AND Follow-Ups (COMBINED)
+// ENDPOINT 8: Check Reminders AND Follow-Ups
 // ============================================
 app.post('/api/check-notifications', async (req, res) => {
   try {
-    console.log('========================================');
-    console.log('CHECKING FOR NOTIFICATIONS (Reminders + Follow-ups)...');
-    
     const now = new Date();
     const allNotifications = [];
-    
+
     // ===================================
-    // 1. CHECK REMINDERS (12h and 1h)
+    // 1. CHECK 12-HOUR REMINDERS
     // ===================================
-    
-    // 12-hour window
     const in12Hours = new Date(now.getTime() + (12 * 60 * 60 * 1000));
     const in11Hours = new Date(now.getTime() + (11 * 60 * 60 * 1000));
-    
-    const bookings12h = await base('Bookings')
-      .select({
-        filterByFormula: `AND(
-          {Status} = "Scheduled",
-          {Reminder12hSent} = FALSE(),
-          IS_AFTER({StartDateTime}, "${in11Hours.toISOString()}"),
-          IS_BEFORE({StartDateTime}, "${in12Hours.toISOString()}")
-        )`,
-        fields: ['Lead', 'Property', 'StartDateTime', 'Tenant']
-      })
-      .all();
-    
+
+    const { data: bookings12h, error: error12h } = await supabase
+      .from('bookings')
+      .select(`
+        id,
+        start_datetime,
+        lead_id,
+        tenant_id,
+        leads (name, phone),
+        properties (
+          property_name,
+          address,
+          agents (agent_name, phone)
+        ),
+        tenants (timezone, whatsapp_number)
+      `)
+      .eq('status', 'Scheduled')
+      .eq('reminder_12h_sent', false)
+      .gt('start_datetime', in11Hours.toISOString())
+      .lt('start_datetime', in12Hours.toISOString());
+
+    if (error12h) throw error12h;
+
     for (const booking of bookings12h) {
-      const leadId = booking.get('Lead')?.[0];
-      const propertyId = booking.get('Property')?.[0];
-      const tenantId = booking.get('Tenant')?.[0];
-      const startTime = new Date(booking.get('StartDateTime'));
-      
-      if (!leadId || !propertyId || !tenantId) continue;
-      
-      const lead = await base('Leads').find(leadId);
-      const property = await base('Properties').find(propertyId);
-      const tenant = await base('Tenants').find(tenantId);
-      
-      const agentNameRaw = property.get('Agent Name');
-      const agentPhoneRaw = property.get('Agent Phone');
-      const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
-      const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
-      
-      const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
-      const propertyName = property.get('Property Name');
-      const propertyAddress = property.get('Address');
-      const leadName = lead.get('Name');
-      const leadPhone = lead.get('Phone');
-      
-      const formattedDate = startTime.toLocaleDateString('en-KE', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric' });
-      const formattedTime = startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
-      
-      const message = `🔔 REMINDER: Viewing Tomorrow!\n\n` +
-        ` ${propertyName}\n` +
-        ` ${startTime.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' })}\n` +
-        ` ${formattedTime}\n` +
-        ` ${propertyAddress}\n\n` +
-        (agentName ? ` Agent: ${agentName}\n` : '') +
-        (agentPhone ? ` ${agentPhone}\n\n` : '\n') +
+      const timezone = booking.tenants?.timezone || 'Africa/Nairobi';
+      const startTime = new Date(booking.start_datetime);
+      const leadName = booking.leads?.name;
+      const leadPhone = booking.leads?.phone;
+      const propertyName = booking.properties?.property_name;
+      const propertyAddress = booking.properties?.address;
+      const agentName = booking.properties?.agents?.agent_name || null;
+      const agentPhone = booking.properties?.agents?.phone || null;
+
+      const formattedDate = startTime.toLocaleDateString('en-KE', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric'
+      });
+      const formattedTime = startTime.toLocaleTimeString('en-KE', {
+        timeZone: timezone,
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+
+      const message =
+        `Reminder: Viewing Coming Up!\n\n` +
+        `Property: ${propertyName}\n` +
+        `Date: ${startTime.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', month: 'short', day: 'numeric' })}\n` +
+        `Time: ${formattedTime}\n` +
+        `Address: ${propertyAddress}\n\n` +
+        (agentName ? `Agent: ${agentName}\n` : '') +
+        (agentPhone ? `Agent Phone: ${agentPhone}\n\n` : '\n') +
         `See you there!`;
-      
-      const agentMessage = `🔔 *UPCOMING VIEWING REMINDER*\n\n` +
-        `👤 Client: ${leadName}\n` +
-        `📱 Phone: ${leadPhone}\n` +
-        `🏠 Property: ${propertyName}\n` +
-        `📅 Date: ${formattedDate}\n` +
-        `⏰ Time: ${formattedTime}\n\n` +
+
+      const agentMessage =
+        `Upcoming Viewing Reminder\n\n` +
+        `Client: ${leadName}\n` +
+        `Phone: ${leadPhone}\n` +
+        `Property: ${propertyName}\n` +
+        `Date: ${formattedDate}\n` +
+        `Time: ${formattedTime}\n\n` +
         `Please be ready to meet the client.`;
-      
+
       allNotifications.push({
         type: 'reminder_12h',
         bookingId: booking.id,
         leadPhone: leadPhone,
         leadName: leadName,
-        tenantWhatsApp: tenant.get('WhatsApp Number'),
+        tenantWhatsApp: booking.tenants?.whatsapp_number,
         message: message,
         agentNotification: {
           agentPhone: agentPhone,
@@ -1045,68 +849,80 @@ app.post('/api/check-notifications', async (req, res) => {
         }
       });
     }
-    
-    // 1-hour window
+
+    // ===================================
+    // 2. CHECK 1-HOUR REMINDERS
+    // ===================================
     const in1Hour = new Date(now.getTime() + (1 * 60 * 60 * 1000));
     const in50Minutes = new Date(now.getTime() + (50 * 60 * 1000));
-    
-    const bookings1h = await base('Bookings')
-      .select({
-        filterByFormula: `AND(
-          {Status} = "Scheduled",
-          {Reminder1hSent} = FALSE(),
-          IS_AFTER({StartDateTime}, "${in50Minutes.toISOString()}"),
-          IS_BEFORE({StartDateTime}, "${in1Hour.toISOString()}")
-        )`,
-        fields: ['Lead', 'Property', 'StartDateTime', 'Tenant']
-      })
-      .all();
-    
+
+    const { data: bookings1h, error: error1h } = await supabase
+      .from('bookings')
+      .select(`
+        id,
+        start_datetime,
+        lead_id,
+        tenant_id,
+        leads (name, phone),
+        properties (
+          property_name,
+          address,
+          agents (agent_name, phone)
+        ),
+        tenants (timezone, whatsapp_number)
+      `)
+      .eq('status', 'Scheduled')
+      .eq('reminder_1h_sent', false)
+      .gt('start_datetime', in50Minutes.toISOString())
+      .lt('start_datetime', in1Hour.toISOString());
+
+    if (error1h) throw error1h;
+
     for (const booking of bookings1h) {
-      const leadId = booking.get('Lead')?.[0];
-      const propertyId = booking.get('Property')?.[0];
-      const tenantId = booking.get('Tenant')?.[0];
-      
-      if (!leadId || !propertyId || !tenantId) continue;
-      
-      const lead = await base('Leads').find(leadId);
-      const property = await base('Properties').find(propertyId);
-      const tenant = await base('Tenants').find(tenantId);
-      
-      const agentNameRaw = property.get('Agent Name');
-      const agentPhoneRaw = property.get('Agent Phone');
-      const agentName = Array.isArray(agentNameRaw) ? agentNameRaw[0] : agentNameRaw;
-      const agentPhone = Array.isArray(agentPhoneRaw) ? agentPhoneRaw[0] : agentPhoneRaw;
-      
-      const timezone = tenant.get('Time Zone') || 'Africa/Nairobi';
-      const startTime = new Date(booking.get('StartDateTime'));
-      const propertyName = property.get('Property Name');
-      const propertyAddress = property.get('Address');
-      const leadName = lead.get('Name');
-      const leadPhone = lead.get('Phone');
-      
-      const formattedDate = startTime.toLocaleDateString('en-KE', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric' });
-      const formattedTime = startTime.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
-      
-      const message = `⏰ Your viewing starts in 1 HOUR!\n\n` +
-        ` ${propertyName}\n` +
-        ` ${propertyAddress}\n\n` +
-        `The agent is ready for you! 🎉`;
-      
-      const agentMessage = `🔔 *UPCOMING VIEWING REMINDER*\n\n` +
-        `👤 Client: ${leadName}\n` +
-        `📱 Phone: ${leadPhone}\n` +
-        `🏠 Property: ${propertyName}\n` +
-        `📅 Date: ${formattedDate}\n` +
-        `⏰ Time: ${formattedTime}\n\n` +
-        `The client is on their way!`;
-      
+      const timezone = booking.tenants?.timezone || 'Africa/Nairobi';
+      const startTime = new Date(booking.start_datetime);
+      const leadName = booking.leads?.name;
+      const leadPhone = booking.leads?.phone;
+      const propertyName = booking.properties?.property_name;
+      const propertyAddress = booking.properties?.address;
+      const agentName = booking.properties?.agents?.agent_name || null;
+      const agentPhone = booking.properties?.agents?.phone || null;
+
+      const formattedDate = startTime.toLocaleDateString('en-KE', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric'
+      });
+      const formattedTime = startTime.toLocaleTimeString('en-KE', {
+        timeZone: timezone,
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+
+      const message =
+        `Your viewing starts in 1 hour!\n\n` +
+        `Property: ${propertyName}\n` +
+        `Address: ${propertyAddress}\n` +
+        `Time: ${formattedTime}\n\n` +
+        `The agent is ready for you.`;
+
+      const agentMessage =
+        `Upcoming Viewing Reminder\n\n` +
+        `Client: ${leadName}\n` +
+        `Phone: ${leadPhone}\n` +
+        `Property: ${propertyName}\n` +
+        `Date: ${formattedDate}\n` +
+        `Time: ${formattedTime}\n\n` +
+        `The client is on their way.`;
+
       allNotifications.push({
         type: 'reminder_1h',
         bookingId: booking.id,
         leadPhone: leadPhone,
         leadName: leadName,
-        tenantWhatsApp: tenant.get('WhatsApp Number'),
+        tenantWhatsApp: booking.tenants?.whatsapp_number,
         message: message,
         agentNotification: {
           agentPhone: agentPhone,
@@ -1120,71 +936,65 @@ app.post('/api/check-notifications', async (req, res) => {
         }
       });
     }
-    
+
     // ===================================
-    // 2. CHECK FOLLOW-UPS (3 hours after)
+    // 3. CHECK FOLLOW-UPS
     // ===================================
-    
     const twoHalfHoursAgo = new Date(now.getTime() - (2.5 * 60 * 60 * 1000));
     const threeHalfHoursAgo = new Date(now.getTime() - (3.5 * 60 * 60 * 1000));
-    
-    const followUpBookings = await base('Bookings')
-      .select({
-        filterByFormula: `AND(
-          {Status} = "Scheduled",
-          {FollowUpSent} = FALSE(),
-          IS_AFTER({EndDateTime}, "${threeHalfHoursAgo.toISOString()}"),
-          IS_BEFORE({EndDateTime}, "${twoHalfHoursAgo.toISOString()}")
-        )`,
-        fields: ['Lead', 'Property', 'EndDateTime', 'Tenant']
-      })
-      .all();
-    
+
+    const { data: followUpBookings, error: followUpError } = await supabase
+      .from('bookings')
+      .select(`
+        id,
+        end_datetime,
+        lead_id,
+        tenant_id,
+        leads (name, phone),
+        properties (property_name),
+        tenants (whatsapp_number)
+      `)
+      .eq('status', 'Scheduled')
+      .eq('followup_sent', false)
+      .gt('end_datetime', threeHalfHoursAgo.toISOString())
+      .lt('end_datetime', twoHalfHoursAgo.toISOString());
+
+    if (followUpError) throw followUpError;
+
     for (const booking of followUpBookings) {
-      const leadId = booking.get('Lead')?.[0];
-      const propertyId = booking.get('Property')?.[0];
-      const tenantId = booking.get('Tenant')?.[0];
-      
-      if (!leadId || !propertyId || !tenantId) continue;
-      
-      const lead = await base('Leads').find(leadId);
-      const property = await base('Properties').find(propertyId);
-      const tenant = await base('Tenants').find(tenantId);
-      
-      const message = `Hi ${lead.get('Name')} 👋\n\n` +
-        `How was your viewing of ${property.get('Property Name')}?\n\n` +
+      const leadName = booking.leads?.name;
+      const leadPhone = booking.leads?.phone;
+      const propertyName = booking.properties?.property_name;
+
+      const message =
+        `Hi ${leadName},\n\n` +
+        `How was your viewing of ${propertyName}?\n\n` +
         `Reply:\n` +
-        `1️⃣ Interested\n` +
-        `2️⃣ Not Interested\n` +
-        `3️⃣ HI – to search another property\n\n` +
-        `We're here to help! 🏡`;
-      
+        `1 - Interested\n` +
+        `2 - Not Interested\n` +
+        `HI - to search for another property\n\n` +
+        `We are here to help!`;
+
       allNotifications.push({
         type: 'followup',
         bookingId: booking.id,
-        leadId: leadId,
-        leadPhone: lead.get('Phone'),
-        leadName: lead.get('Name'),
-        propertyName: property.get('Property Name'),
-        tenantWhatsApp: tenant.get('WhatsApp Number'),
+        leadId: booking.lead_id,
+        leadPhone: leadPhone,
+        leadName: leadName,
+        propertyName: propertyName,
+        tenantWhatsApp: booking.tenants?.whatsapp_number,
         message: message
       });
     }
-    
-    console.log('Total notifications:', allNotifications.length);
-    console.log('  Reminders 12h:', allNotifications.filter(n => n.type === 'reminder_12h').length);
-    console.log('  Reminders 1h:', allNotifications.filter(n => n.type === 'reminder_1h').length);
-    console.log('  Follow-ups:', allNotifications.filter(n => n.type === 'followup').length);
-    console.log('========================================');
-    
+
     res.json({
       success: true,
       notifications: allNotifications,
       count: allNotifications.length
     });
-    
+
   } catch (error) {
-    console.error('ERROR:', error);
+    console.error('Error in check-notifications:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1195,31 +1005,35 @@ app.post('/api/check-notifications', async (req, res) => {
 app.post('/api/mark-notification-sent', async (req, res) => {
   try {
     const { bookingId, type } = req.body;
-    
+
     if (!bookingId || !type) {
       return res.status(400).json({ success: false, error: 'bookingId and type required' });
     }
-    
+
     const updateData = {};
-    
+
     if (type === 'reminder_12h') {
-      updateData['Reminder12hSent'] = true;
+      updateData.reminder_12h_sent = true;
     } else if (type === 'reminder_1h') {
-      updateData['Reminder1hSent'] = true;
+      updateData.reminder_1h_sent = true;
     } else if (type === 'followup') {
-      updateData['FollowUpSent'] = true;
+      updateData.followup_sent = true;
     }
-    
-    await base('Bookings').update(bookingId, updateData);
-    
+
+    const { error } = await supabase
+      .from('bookings')
+      .update(updateData)
+      .eq('id', bookingId);
+
+    if (error) throw error;
+
     res.json({ success: true });
-    
+
   } catch (error) {
-    console.error('ERROR:', error);
+    console.error('Error in mark-notification-sent:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 
 // ============================================
 // ENDPOINT 10: Handle Follow-Up Response
@@ -1227,90 +1041,127 @@ app.post('/api/mark-notification-sent', async (req, res) => {
 app.post('/api/handle-followup-response', async (req, res) => {
   try {
     const { leadId, response } = req.body;
-    
-    console.log('Follow-up response:', leadId, response);
-    
+
     if (!leadId || !response) {
       return res.status(400).json({ success: false, error: 'leadId and response required' });
     }
-    
-    const lead = await base('Leads').find(leadId);
-    const leadName = lead.get('Name');
-    
+
+    // Get lead details
+    const { data: lead, error: leadError } = await supabase
+      .from('leads')
+      .select('name, phone')
+      .eq('id', leadId)
+      .single();
+
+    if (leadError) throw leadError;
+
+    const leadName = lead.name;
+    const leadPhone = lead.phone;
+
     if (response === '1' || response.toLowerCase().includes('interested')) {
-      // Mark as interested
-      await base('Leads').update(leadId, {
-        'Status': 'Hot Lead',
-        'Conversation Stage': 'interested_after_viewing'
-      });
-      
-      const userMessage = `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`;
-      
-      const agentMessage = `🔥 *HOT LEAD ALERT!*\n\n` +
-        `${leadName} is INTERESTED after viewing!\n\n` +
-        `📞 Contact them ASAP: ${lead.get('Phone')}\n\n` +
-        `Strike while the iron is hot! 🎯`;
-      
+
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({
+          status: 'Hot Lead',
+          conversation_stage: 'interested_after_viewing'
+        })
+        .eq('id', leadId);
+
+      if (updateError) throw updateError;
+
+      const userMessage =
+        `Great news!\n\n` +
+        `Our agent will contact you shortly to discuss next steps.\n\n` +
+        `Reply HI anytime to search for more properties.`;
+
+      const agentMessage =
+        `Hot Lead Alert!\n\n` +
+        `${leadName} is interested after their viewing.\n\n` +
+        `Contact them as soon as possible: ${leadPhone}`;
+
       res.json({
         success: true,
         userMessage: userMessage,
         agentMessage: agentMessage,
         notifyAgent: true
       });
-      
+
     } else if (response === '2' || response.toLowerCase().includes('not interested')) {
-      // Mark as not interested
-      await base('Leads').update(leadId, {
-        'Status': 'Not Interested',
-        'Conversation Stage': 'not_interested_after_viewing'
-      });
-      
-      const userMessage = `Thank you for your feedback! 🙏\n\nIf you change your mind, just reply HI anytime.\n\nWe're always here to help! 🏡`;
-      
+
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({
+          status: 'Not Interested',
+          conversation_stage: 'not_interested_after_viewing'
+        })
+        .eq('id', leadId);
+
+      if (updateError) throw updateError;
+
+      const userMessage =
+        `Thank you for your feedback.\n\n` +
+        `If you change your mind, just reply HI anytime.\n\n` +
+        `We are always here to help.`;
+
       res.json({
         success: true,
         userMessage: userMessage,
         notifyAgent: false
       });
-      
+
     } else {
-      // Invalid response
       res.json({
         success: false,
         invalidResponse: true,
-        userMessage: `Please reply:\n1️⃣ Interested\n2️⃣ Not Interested\n3️⃣ HI – to search another property`
+        userMessage:
+          `Please reply:\n` +
+          `1 - Interested\n` +
+          `2 - Not Interested\n` +
+          `HI - to search for another property`
       });
     }
-    
+
   } catch (error) {
-    console.error('ERROR in handle-followup-response:', error);
+    console.error('Error in handle-followup-response:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ============================================
-// ENDPOINT 11: Mark awaiting-followup (FIXED FIELD NAME)
+// ENDPOINT 11: Mark Awaiting Follow-Up
 // ============================================
 app.post('/api/mark-awaiting-followup', async (req, res) => {
   try {
     const { leadId, awaiting, propertyName } = req.body;
-    
-    const updateData = {
-      'AwaitingFollowUpResponse': awaiting
-    };
-    
-    // If property name is provided, store it (FIXED: Use correct field name without spaces)
-    if (propertyName) {
-      updateData['LastViewedProperty'] = propertyName;
+
+    if (!leadId) {
+      return res.status(400).json({ success: false, error: 'leadId is required' });
     }
-    
-    await base('Leads').update(leadId, updateData);
-    
+
+    const updateData = {
+      awaiting_followup_response: awaiting
+    };
+
+    if (propertyName) {
+      updateData.last_viewed_property = propertyName;
+    }
+
+    const { error } = await supabase
+      .from('leads')
+      .update(updateData)
+      .eq('id', leadId);
+
+    if (error) throw error;
+
     res.json({ success: true });
+
   } catch (error) {
+    console.error('Error in mark-awaiting-followup:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 // ============================================
 // Start Server
