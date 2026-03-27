@@ -36,6 +36,57 @@ function cacheTenant(tenantId, data) {
 }
 
 // ============================================
+// Auto Lookup Tenant and Lead
+// ============================================
+async function getTenantAndLead(to, from) {
+  try {
+    // Clean the phone numbers
+    const toNumber = to.replace('whatsapp:', '').trim();
+    const fromNumber = from.trim();
+
+    // Check cache first
+    const cached = getCachedTenant(toNumber);
+    let tenant = cached;
+
+    // If not cached, look up tenant by WhatsApp number
+    if (!tenant) {
+      const { data, error } = await supabase
+        .from('tenants')
+        .select('*')
+        .or(`whatsapp_number.eq.${to},whatsapp_number.eq.whatsapp:${toNumber}`)
+        .eq('active', true)
+        .single();
+
+      if (error || !data) {
+        console.error('Tenant not found for number:', to);
+        return { tenant: null, lead: null };
+      }
+
+      tenant = data;
+      cacheTenant(toNumber, tenant);
+    }
+
+    // Look up lead by phone number and tenant
+    const { data: lead, error: leadError } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('phone', fromNumber)
+      .eq('tenant_id', tenant.id)
+      .single();
+
+    // Lead might not exist yet (new user) - that is okay
+    return {
+      tenant: tenant,
+      lead: leadError ? null : lead
+    };
+
+  } catch (error) {
+    console.error('Error in getTenantAndLead:', error);
+    return { tenant: null, lead: null };
+  }
+}
+
+// ============================================
 // Health Check
 // ============================================
 app.get('/', (req, res) => {
@@ -59,11 +110,115 @@ app.get('/', (req, res) => {
 // ============================================
 app.post('/api/handle-message', async (req, res) => {
   try {
-    const result = await handleMessage(req.body);
+    const { message, from, to } = req.body;
+
+    if (!message || !from || !to) {
+      return res.status(400).json({
+        action: "error",
+        replyMessage: "Missing required fields."
+      });
+    }
+
+    // Look up tenant and lead automatically
+    const { tenant, lead } = await getTenantAndLead(to, from);
+
+    if (!tenant) {
+      return res.status(404).json({
+        action: "error",
+        replyMessage: "Sorry, this service is not available on this number."
+      });
+    }
+
+    // Build the input object for handleMessage
+    const input = {
+      message: message,
+      from: from,
+      lead_id: lead?.id || null,
+      lead_stage: lead?.conversation_stage || null,
+      lead_interest: lead?.interest || null,
+      lead_budget: lead?.budget || null,
+      lead_location: lead?.location || null,
+      lead_size: lead?.size || null,
+      lead_name: lead?.name || null,
+      lead_whatsapp: lead?.phone || null,
+      last_viewed_property: lead?.last_viewed_property || null,
+      awaiting_followup_response: lead?.awaiting_followup_response || false,
+      tenant_id: tenant.id,
+      tenant_company_name: tenant.company_name,
+      tenant_bot_name: tenant.bot_name,
+      tenant_property_types: tenant.property_types,
+      tenant_whatsapp: tenant.whatsapp_number
+    };
+
+    const result = await handleMessage(input);
+
+    // If action is create, create the lead in Supabase
+    if (result.action === 'create') {
+      const { data: newLead, error: createError } = await supabase
+        .from('leads')
+        .insert({
+          phone: from,
+          tenant_id: tenant.id,
+          status: result.updateFields?.Status || 'New',
+          conversation_stage: result.updateFields?.['Conversation Stage'] || 'asked_buy_or_rent'
+        })
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Error creating lead:', createError);
+      }
+    }
+
+    // If action is update, update the lead in Supabase
+    if (result.action === 'update' && lead) {
+      const updateData = {};
+
+      if (result.updateFields?.['Conversation Stage']) {
+        updateData.conversation_stage = result.updateFields['Conversation Stage'];
+      }
+      if (result.updateFields?.Name) {
+        updateData.name = result.updateFields.Name;
+      }
+      if (result.updateFields?.Interest) {
+        updateData.interest = result.updateFields.Interest;
+      }
+      if (result.updateFields?.Budget) {
+        updateData.budget = result.updateFields.Budget;
+      }
+      if (result.updateFields?.Location) {
+        updateData.location = result.updateFields.Location;
+      }
+      if (result.updateFields?.Size) {
+        updateData.size = result.updateFields.Size;
+      }
+      if (result.updateFields?.Status) {
+        updateData.status = result.updateFields.Status;
+      }
+      if (result.updateFields?.['Selected Property Number']) {
+        updateData.selected_property_number = result.updateFields['Selected Property Number'];
+      }
+      if (result.updateFields?.['Available Slots']) {
+        updateData.available_slots = result.updateFields['Available Slots'];
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        const { error: updateError } = await supabase
+          .from('leads')
+          .update(updateData)
+          .eq('id', lead.id);
+
+        if (updateError) {
+          console.error('Error updating lead:', updateError);
+        }
+      }
+    }
+
     res.json(result);
+
   } catch (error) {
     console.error('Error in handle-message:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       action: "error",
       replyMessage: "Sorry, something went wrong. Please try again or send HI to restart."
     });
