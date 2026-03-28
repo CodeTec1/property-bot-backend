@@ -152,7 +152,9 @@ app.post('/api/handle-message', async (req, res) => {
 
     const result = await handleMessage(input);
 
+    // -----------------------------------------------
     // If action is create, create the lead in Supabase
+    // -----------------------------------------------
     if (result.action === 'create') {
       const { data: newLead, error: createError } = await supabase
         .from('leads')
@@ -170,7 +172,9 @@ app.post('/api/handle-message', async (req, res) => {
       }
     }
 
+    // -----------------------------------------------
     // If action is update, update the lead in Supabase
+    // -----------------------------------------------
     if (result.action === 'update' && lead) {
       const updateData = {};
 
@@ -211,6 +215,111 @@ app.post('/api/handle-message', async (req, res) => {
         if (updateError) {
           console.error('Error updating lead:', updateError);
         }
+      }
+    }
+
+    // -----------------------------------------------
+    // If action is fetch_locations, update lead budget
+    // and conversation stage
+    // -----------------------------------------------
+    if (result.action === 'fetch_locations' && lead) {
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({
+          budget: result.updateFields?.Budget,
+          conversation_stage: 'fetching_locations'
+        })
+        .eq('id', lead.id);
+
+      if (updateError) {
+        console.error('Error updating lead for fetch_locations:', updateError);
+      }
+    }
+
+    // -----------------------------------------------
+    // If action is fetch_sizes, update lead location
+    // and conversation stage
+    // -----------------------------------------------
+    if (result.action === 'fetch_sizes' && lead) {
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({
+          location: result.location,
+          conversation_stage: 'fetching_sizes'
+        })
+        .eq('id', lead.id);
+
+      if (updateError) {
+        console.error('Error updating lead for fetch_sizes:', updateError);
+      }
+    }
+
+    // -----------------------------------------------
+    // If action is booking, save selected property
+    // number and return actual property ID
+    // -----------------------------------------------
+    if (result.action === 'booking' && lead) {
+      // Save selected property number to Supabase
+      const { error: bookingUpdateError } = await supabase
+        .from('leads')
+        .update({
+          selected_property_number: result.propertyNumber,
+          conversation_stage: 'awaiting_time_slot'
+        })
+        .eq('id', lead.id);
+
+      if (bookingUpdateError) {
+        console.error('Error updating lead for booking:', bookingUpdateError);
+      }
+
+      // Fetch the actual property ID using the same
+      // search criteria as the original property search
+      const { data: properties } = await supabase
+        .from('properties')
+        .select('id')
+        .eq('tenant_id', tenant.id)
+        .eq('type', lead.interest)
+        .eq('location', lead.location)
+        .eq('available', true)
+        .order('price', { ascending: true })
+        .limit(result.propertyNumber);
+
+      if (properties && properties.length >= result.propertyNumber) {
+        result.propertyId = properties[result.propertyNumber - 1].id;
+      }
+    }
+
+    // -----------------------------------------------
+    // If action is create_booking, save selected
+    // time slot to Supabase
+    // -----------------------------------------------
+    if (result.action === 'create_booking' && lead) {
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({
+          conversation_stage: 'booking_confirmed'
+        })
+        .eq('id', lead.id);
+
+      if (updateError) {
+        console.error('Error updating lead for create_booking:', updateError);
+      }
+    }
+
+    // -----------------------------------------------
+    // If action is cancel_booking, update lead stage
+    // -----------------------------------------------
+    if (result.action === 'cancel_booking' && lead) {
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({
+          conversation_stage: 'booking_cancelled',
+          status: 'Cancelled'
+        })
+        .eq('id', lead.id);
+
+      if (updateError) {
+        console.error('Error updating lead for cancel_booking:', updateError);
       }
     }
 
