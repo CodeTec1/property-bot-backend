@@ -313,7 +313,7 @@ if (result.action === 'create_booking' && lead) {
   // Enrich result with all data needed for booking
   result.lead_id = lead.id;
   result.lead_name = lead.name;
-  result.from = lead.phone;
+  result.from = lead.phone ? lead.phone.replace('whatsapp:', '').trim() : null;
   result.tenant_id = tenant.id;
 
   // Get property ID using selected property number
@@ -361,7 +361,7 @@ if (result.action === 'cancel_booking' && lead) {
 if (lead) {
   result.lead_id = result.lead_id || lead.id;
   result.lead_name = result.lead_name || lead.name;
-  result.lead_phone = lead.phone;
+  result.lead_phone = lead.phone ? lead.phone.replace('whatsapp:', '').trim() : null;
   result.lead_budget = lead.budget;
   result.lead_interest = lead.interest;       
   result.lead_location = lead.location;  
