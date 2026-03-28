@@ -362,6 +362,7 @@ if (lead) {
   result.lead_id = result.lead_id || lead.id;
   result.lead_name = result.lead_name || lead.name;
   result.lead_phone = lead.phone;
+  result.last_viewed_property = lead.last_viewed_property || null;
   result.tenant_id = result.tenant_id || tenant.id;
   result.tenant_calendar_id = tenant.google_calendar_id;
 }
