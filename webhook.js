@@ -11,6 +11,17 @@ const twilioClient = twilio(
 );
 
 // ============================================
+// Twilio Template SIDs
+// ============================================
+const TEMPLATES = {
+  BOOKING_CONFIRMED: 'HX9eed3c1924829f0ae1ecab49e84d99d9',
+  VIEWING_REMINDER: 'HXe2f13d97461952b669a22dd6a17081aa',
+  BOOKING_CANCELLED: 'HX1110acf915d7366c907299818993fa00',
+  HOT_LEAD: 'HX8e8cfe432e7ae3256d6d5c343359d85e',
+  NO_PROPERTY_FOUND: 'HX6b9d047af7d746a257c0099c9c34034e'
+};
+
+// ============================================
 // Helper: Look up tenant and lead
 // ============================================
 async function getTenantAndLead(to, from) {
@@ -45,7 +56,7 @@ async function getTenantAndLead(to, from) {
 }
 
 // ============================================
-// Helper: Send Twilio message safely
+// Helper: Send regular Twilio message to user
 // ============================================
 async function sendMessage(from, to, body, mediaUrl = null) {
   try {
@@ -54,6 +65,33 @@ async function sendMessage(from, to, body, mediaUrl = null) {
     await twilioClient.messages.create(options);
   } catch (error) {
     console.error(`Error sending message to ${to}:`, error.message);
+  }
+}
+
+// ============================================
+// Helper: Send Twilio template to agent
+// ============================================
+async function sendTemplateToAgent(tenantWhatsApp, agentPhone, templateSid, variables) {
+  try {
+    if (!agentPhone) {
+      console.error('No agent phone provided');
+      return;
+    }
+
+    const agentWhatsApp = agentPhone.startsWith('whatsapp:')
+      ? agentPhone
+      : `whatsapp:${agentPhone}`;
+
+    await twilioClient.messages.create({
+      from: tenantWhatsApp,
+      to: agentWhatsApp,
+      contentSid: templateSid,
+      contentVariables: JSON.stringify(variables)
+    });
+
+    console.log('Template sent to agent:', agentPhone);
+  } catch (error) {
+    console.error('Error sending template to agent:', error.message);
   }
 }
 
@@ -89,7 +127,12 @@ async function searchProperties(tenantId, interest, location, size) {
     const normalizedInterest = normalize(interest);
     const normalizedLocation = normalize(location);
 
-    console.log('Searching properties:', { tenantId, normalizedInterest, normalizedLocation, size });
+    console.log('Searching properties:', {
+      tenantId,
+      normalizedInterest,
+      normalizedLocation,
+      size
+    });
 
     let query = supabase
       .from('properties')
@@ -115,7 +158,6 @@ async function searchProperties(tenantId, interest, location, size) {
     }
 
     const { data, error } = await query;
-
     if (error) {
       console.error('Property search error:', error);
       return [];
@@ -131,14 +173,53 @@ async function searchProperties(tenantId, interest, location, size) {
 }
 
 // ============================================
-// Helper: Notify agent via WhatsApp
+// Helper: Get property by number from search
 // ============================================
-async function notifyAgent(tenantWhatsApp, agentPhone, message) {
-  if (!agentPhone) return;
-  const agentWhatsApp = agentPhone.startsWith('whatsapp:')
-    ? agentPhone
-    : `whatsapp:${agentPhone}`;
-  await sendMessage(tenantWhatsApp, agentWhatsApp, message);
+async function getPropertyByNumber(tenantId, interest, location, propertyNumber) {
+  try {
+    const normalizedInterest = normalize(interest);
+    const normalizedLocation = normalize(location);
+
+    const { data: properties } = await supabase
+      .from('properties')
+      .select('id, property_name, price')
+      .eq('tenant_id', tenantId)
+      .ilike('type', normalizedInterest)
+      .ilike('location', normalizedLocation)
+      .eq('available', true)
+      .order('price', { ascending: true })
+      .limit(propertyNumber);
+
+    if (!properties || properties.length < propertyNumber) return null;
+    return properties[propertyNumber - 1];
+
+  } catch (error) {
+    console.error('Error in getPropertyByNumber:', error);
+    return null;
+  }
+}
+
+// ============================================
+// Helper: Format Kenya time
+// ============================================
+function formatKenyaDate(isoString) {
+  const date = new Date(isoString);
+  return date.toLocaleDateString('en-KE', {
+    timeZone: 'Africa/Nairobi',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
+  });
+}
+
+function formatKenyaTime(isoString) {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString('en-KE', {
+    timeZone: 'Africa/Nairobi',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
 }
 
 // ============================================
@@ -179,6 +260,15 @@ router.post('/', async (req, res) => {
       ? lead.phone.replace('whatsapp:', '').trim()
       : from.replace('whatsapp:', '').trim();
 
+    // Get current time in Kenya for templates
+    const now = new Date();
+    const kenyaTime = now.toLocaleTimeString('en-KE', {
+      timeZone: 'Africa/Nairobi',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+
     // Build input for handleMessage
     const input = {
       message: message,
@@ -202,7 +292,6 @@ router.post('/', async (req, res) => {
 
     // Process message through handleMessage
     const result = await handleMessage(input);
-
     console.log('Action:', result.action);
 
     // -----------------------------------------------
@@ -244,7 +333,6 @@ router.post('/', async (req, res) => {
 
       // Then search properties if needed
       if (result.searchProperties) {
-        // Use updated values not old lead values
         const searchInterest = updateData.interest || lead.interest;
         const searchLocation = updateData.location || lead.location;
         const searchSize = updateData.size || lead.size;
@@ -280,7 +368,6 @@ router.post('/', async (req, res) => {
               property.photo_url || null
             );
 
-            // Delay between messages so they arrive in order
             if (i < properties.length - 1) await delay(2000);
           }
         } else {
@@ -295,17 +382,16 @@ router.post('/', async (req, res) => {
             `Reply HI to start a new search.`
           );
 
-          // Notify agent
-          await notifyAgent(
+          // Notify agent via template
+          await sendTemplateToAgent(
             tenantWhatsApp,
             agentPhone,
-            `Lead Alert!\n\n` +
-            `Client: ${lead.name || 'Unknown'}\n` +
-            `Phone: ${cleanLeadPhone}\n` +
-            `Interest: ${searchInterest}\n` +
-            `Location: ${searchLocation}\n` +
-            `Budget: KES ${lead.budget || 'Not specified'}\n\n` +
-            `Could not find matching properties. Please follow up.`
+            TEMPLATES.NO_PROPERTY_FOUND,
+            {
+              "1": lead.name || 'Unknown',
+              "2": cleanLeadPhone,
+              "3": kenyaTime
+            }
           );
         }
       }
@@ -316,7 +402,6 @@ router.post('/', async (req, res) => {
     // ACTION: fetch_locations
     // -----------------------------------------------
     if (result.action === 'fetch_locations' && lead) {
-      // Save budget first
       await supabase
         .from('leads')
         .update({
@@ -325,10 +410,9 @@ router.post('/', async (req, res) => {
         })
         .eq('id', lead.id);
 
-      // Send "let me check" message first
+      // Send checking message first
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Fetch locations from Supabase
       const interest = result.interest || lead.interest;
       const normalizedInterest = normalize(interest);
 
@@ -343,7 +427,6 @@ router.post('/', async (req, res) => {
         const locations = [...new Set(locData.map(r => r.location).filter(Boolean))].sort();
         const formatted = locations.map(loc => `• ${loc}`).join('\n');
 
-        // Update stage to asked_location
         await supabase
           .from('leads')
           .update({ conversation_stage: 'asked_location' })
@@ -370,7 +453,6 @@ router.post('/', async (req, res) => {
     // ACTION: fetch_sizes
     // -----------------------------------------------
     if (result.action === 'fetch_sizes' && lead) {
-      // Save location first
       await supabase
         .from('leads')
         .update({
@@ -379,7 +461,7 @@ router.post('/', async (req, res) => {
         })
         .eq('id', lead.id);
 
-      // Send "checking" message first
+      // Send checking message first
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
       const interest = lead.interest || '';
@@ -441,7 +523,6 @@ router.post('/', async (req, res) => {
     // ACTION: booking — check available slots
     // -----------------------------------------------
     if (result.action === 'booking' && lead) {
-      // Save selected property number
       await supabase
         .from('leads')
         .update({
@@ -450,24 +531,17 @@ router.post('/', async (req, res) => {
         })
         .eq('id', lead.id);
 
-      // Send "checking availability" message
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Find the actual property ID
-      const normalizedInterest = normalize(lead.interest);
-      const normalizedLocation = normalize(lead.location);
+      // Find the actual property
+      const selectedProperty = await getPropertyByNumber(
+        tenant.id,
+        lead.interest,
+        lead.location,
+        result.propertyNumber
+      );
 
-      const { data: properties } = await supabase
-        .from('properties')
-        .select('id, property_name')
-        .eq('tenant_id', tenant.id)
-        .ilike('type', normalizedInterest)
-        .ilike('location', normalizedLocation)
-        .eq('available', true)
-        .order('price', { ascending: true })
-        .limit(result.propertyNumber);
-
-      if (!properties || properties.length < result.propertyNumber) {
+      if (!selectedProperty) {
         await sendMessage(
           tenantWhatsApp,
           from,
@@ -475,8 +549,6 @@ router.post('/', async (req, res) => {
         );
         return;
       }
-
-      const selectedProperty = properties[result.propertyNumber - 1];
 
       // Get available slots
       const slotsResponse = await fetch(
@@ -493,12 +565,13 @@ router.post('/', async (req, res) => {
       );
       const slotsData = await slotsResponse.json();
 
-      // Save property ID and slot map to lead
+      // Save property ID, slot map and property name to lead
       await supabase
         .from('leads')
         .update({
           available_slots: slotsData.slotMap,
-          last_viewed_property: selectedProperty.property_name
+          last_viewed_property: selectedProperty.property_name,
+          selected_property_id: selectedProperty.id
         })
         .eq('id', lead.id);
 
@@ -512,21 +585,10 @@ router.post('/', async (req, res) => {
     if (result.action === 'create_booking' && lead) {
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Get property ID from fresh search
-      const normalizedInterest = normalize(lead.interest);
-      const normalizedLocation = normalize(lead.location);
+      // Use saved property ID from lead record
+      const propertyId = lead.selected_property_id;
 
-      const { data: properties } = await supabase
-        .from('properties')
-        .select('id, property_name')
-        .eq('tenant_id', tenant.id)
-        .ilike('type', normalizedInterest)
-        .ilike('location', normalizedLocation)
-        .eq('available', true)
-        .order('price', { ascending: true })
-        .limit(lead.selected_property_number);
-
-      if (!properties || properties.length < lead.selected_property_number) {
+      if (!propertyId) {
         await sendMessage(
           tenantWhatsApp,
           from,
@@ -535,7 +597,6 @@ router.post('/', async (req, res) => {
         return;
       }
 
-      const selectedProperty = properties[lead.selected_property_number - 1];
       const slotMap = lead.available_slots || '{}';
 
       const bookingResponse = await fetch(
@@ -546,7 +607,7 @@ router.post('/', async (req, res) => {
           body: JSON.stringify({
             tenantId: tenant.id,
             leadId: lead.id,
-            propertyId: selectedProperty.id,
+            propertyId: propertyId,
             slotNumber: result.selectedTime.toString(),
             slotMap: slotMap,
             leadName: lead.name,
@@ -557,7 +618,6 @@ router.post('/', async (req, res) => {
       const bookingData = await bookingResponse.json();
 
       if (bookingData.success) {
-        // Update lead stage
         await supabase
           .from('leads')
           .update({ conversation_stage: 'booking_confirmed' })
@@ -566,29 +626,30 @@ router.post('/', async (req, res) => {
         // Confirm to user
         await sendMessage(tenantWhatsApp, from, bookingData.message);
 
-        // Notify agent
-        await notifyAgent(
+        // Notify agent via template
+        await sendTemplateToAgent(
           tenantWhatsApp,
           agentPhone,
-          `New Viewing Booked!\n\n` +
-          `Client: ${lead.name}\n` +
-          `Phone: ${cleanLeadPhone}\n` +
-          `Property: ${bookingData.slotDetails?.property}\n` +
-          `Address: ${bookingData.slotDetails?.address}\n` +
-          `Date: ${bookingData.slotDetails?.date}\n` +
-          `Time: ${bookingData.slotDetails?.time}\n` +
-          `Budget: KES ${lead.budget}`
+          TEMPLATES.BOOKING_CONFIRMED,
+          {
+            "1": lead.name || 'Unknown',
+            "2": cleanLeadPhone,
+            "3": bookingData.slotDetails?.property || 'N/A',
+            "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
+            "5": `KES ${lead.budget || 'N/A'}`,
+            "6": lead.location || 'N/A',
+            "7": bookingData.slotDetails?.date || 'N/A',
+            "8": bookingData.slotDetails?.time || 'N/A'
+          }
         );
 
       } else if (bookingData.slotTaken) {
-        // Slot was taken
         await sendMessage(
           tenantWhatsApp,
           from,
           `Sorry, that time slot was just taken.\n\nLet me find you another time...`
         );
 
-        // Get fresh slots
         const newSlotsResponse = await fetch(
           `https://property-bot-backend.onrender.com/api/available-slots-v2`,
           {
@@ -596,7 +657,7 @@ router.post('/', async (req, res) => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               tenantId: tenant.id,
-              propertyId: selectedProperty.id,
+              propertyId: propertyId,
               leadId: lead.id
             })
           }
@@ -612,6 +673,7 @@ router.post('/', async (req, res) => {
           .eq('id', lead.id);
 
         await sendMessage(tenantWhatsApp, from, newSlotsData.message);
+
       } else {
         await sendMessage(
           tenantWhatsApp,
@@ -651,14 +713,22 @@ router.post('/', async (req, res) => {
       const cancelData = await cancelResponse.json();
 
       // Notify user
-      await sendMessage(tenantWhatsApp, from, cancelData.userMessage);
+      await sendMessage(
+        tenantWhatsApp,
+        from,
+        cancelData.userMessage ||
+        `Your viewing has been cancelled.\n\nReply HI to search for another property.`
+      );
 
-      // Notify agent
-      await notifyAgent(
+      // Notify agent via template
+      await sendTemplateToAgent(
         tenantWhatsApp,
         agentPhone,
-        cancelData.agentNotification?.message ||
-        `Booking Cancelled\n\nClient: ${lead.name}\nPhone: ${cleanLeadPhone}`
+        TEMPLATES.BOOKING_CANCELLED,
+        {
+          "1": lead.name || 'Unknown',
+          "2": cleanLeadPhone
+        }
       );
       return;
     }
@@ -678,14 +748,16 @@ router.post('/', async (req, res) => {
 
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Notify agent
-      await notifyAgent(
+      // Notify agent via template
+      await sendTemplateToAgent(
         tenantWhatsApp,
         agentPhone,
-        `Hot Lead Alert!\n\n` +
-        `${lead.name} is interested after their viewing.\n\n` +
-        `Contact them now: ${cleanLeadPhone}\n` +
-        `Property viewed: ${lead.last_viewed_property || 'N/A'}`
+        TEMPLATES.HOT_LEAD,
+        {
+          "1": lead.name || 'Unknown',
+          "2": cleanLeadPhone,
+          "3": lead.last_viewed_property || 'N/A'
+        }
       );
       return;
     }
@@ -717,7 +789,7 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('Error in webhook:', error);
 
-    // Safety net - if anything fails notify user and agent
+    // Safety net
     try {
       const { tenant } = await getTenantAndLead(to, from);
       if (tenant) {
