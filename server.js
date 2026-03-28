@@ -255,73 +255,106 @@ app.post('/api/handle-message', async (req, res) => {
     }
 
     // -----------------------------------------------
-    // If action is booking, save selected property
-    // number and return actual property ID
-    // -----------------------------------------------
-    if (result.action === 'booking' && lead) {
-      // Save selected property number to Supabase
-      const { error: bookingUpdateError } = await supabase
-        .from('leads')
-        .update({
-          selected_property_number: result.propertyNumber,
-          conversation_stage: 'awaiting_time_slot'
-        })
-        .eq('id', lead.id);
+// If action is booking, save selected property
+// number and return actual property ID
+// -----------------------------------------------
+if (result.action === 'booking' && lead) {
+  // Save selected property number to Supabase
+  const { error: bookingUpdateError } = await supabase
+    .from('leads')
+    .update({
+      selected_property_number: result.propertyNumber,
+      conversation_stage: 'awaiting_time_slot'
+    })
+    .eq('id', lead.id);
 
-      if (bookingUpdateError) {
-        console.error('Error updating lead for booking:', bookingUpdateError);
-      }
+  if (bookingUpdateError) {
+    console.error('Error updating lead for booking:', bookingUpdateError);
+  }
 
-      // Fetch the actual property ID using the same
-      // search criteria as the original property search
-      const { data: properties } = await supabase
-        .from('properties')
-        .select('id')
-        .eq('tenant_id', tenant.id)
-        .eq('type', lead.interest)
-        .eq('location', lead.location)
-        .eq('available', true)
-        .order('price', { ascending: true })
-        .limit(result.propertyNumber);
+  // Fetch the actual property ID using the same
+  // search criteria as the original property search
+  const { data: properties } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('tenant_id', tenant.id)
+    .eq('type', lead.interest)
+    .eq('location', lead.location)
+    .eq('available', true)
+    .order('price', { ascending: true })
+    .limit(result.propertyNumber);
 
-      if (properties && properties.length >= result.propertyNumber) {
-        result.propertyId = properties[result.propertyNumber - 1].id;
-      }
-    }
+  if (properties && properties.length >= result.propertyNumber) {
+    result.propertyId = properties[result.propertyNumber - 1].id;
+  }
 
-    // -----------------------------------------------
-    // If action is create_booking, save selected
-    // time slot to Supabase
-    // -----------------------------------------------
-    if (result.action === 'create_booking' && lead) {
-      const { error: updateError } = await supabase
-        .from('leads')
-        .update({
-          conversation_stage: 'booking_confirmed'
-        })
-        .eq('id', lead.id);
-
-      if (updateError) {
-        console.error('Error updating lead for create_booking:', updateError);
-      }
-    }
+  // Enrich result with lead and tenant data for next steps
+  result.lead_id = lead.id;
+  result.lead_name = lead.name;
+  result.tenant_id = tenant.id;
+}
 
     // -----------------------------------------------
-    // If action is cancel_booking, update lead stage
-    // -----------------------------------------------
-    if (result.action === 'cancel_booking' && lead) {
-      const { error: updateError } = await supabase
-        .from('leads')
-        .update({
-          conversation_stage: 'booking_cancelled',
-          status: 'Cancelled'
-        })
-        .eq('id', lead.id);
+// If action is create_booking, save selected
+// time slot to Supabase and enrich result
+// -----------------------------------------------
+if (result.action === 'create_booking' && lead) {
+  const { error: updateError } = await supabase
+    .from('leads')
+    .update({
+      conversation_stage: 'booking_confirmed'
+    })
+    .eq('id', lead.id);
 
-      if (updateError) {
-        console.error('Error updating lead for cancel_booking:', updateError);
-      }
-    }
+  if (updateError) {
+    console.error('Error updating lead for create_booking:', updateError);
+  }
+
+  // Enrich result with all data needed for booking
+  result.lead_id = lead.id;
+  result.lead_name = lead.name;
+  result.from = lead.phone;
+  result.tenant_id = tenant.id;
+
+  // Get property ID using selected property number
+  const { data: properties } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('tenant_id', tenant.id)
+    .eq('type', lead.interest)
+    .eq('location', lead.location)
+    .eq('available', true)
+    .order('price', { ascending: true })
+    .limit(lead.selected_property_number);
+
+  if (properties && properties.length >= lead.selected_property_number) {
+    result.propertyId = properties[lead.selected_property_number - 1].id;
+  }
+
+  // Get available slots from leads table
+  result.slotMap = lead.available_slots || '{}';
+}
+
+    // -----------------------------------------------
+// If action is cancel_booking, update lead stage
+// -----------------------------------------------
+if (result.action === 'cancel_booking' && lead) {
+  const { error: updateError } = await supabase
+    .from('leads')
+    .update({
+      conversation_stage: 'booking_cancelled',
+      status: 'Cancelled'
+    })
+    .eq('id', lead.id);
+
+  if (updateError) {
+    console.error('Error updating lead for cancel_booking:', updateError);
+  }
+
+  // Enrich result with data needed for cancellation
+  result.lead_id = lead.id;
+  result.tenant_calendar_id = tenant.google_calendar_id;
+}
 
     res.json(result);
 
@@ -647,6 +680,20 @@ app.post('/api/available-slots-v2', async (req, res) => {
         freeSlots.map(s => `${s.number}️⃣ ${s.displayDate}, ${s.displayTime}`).join('\n') +
         `\n\nReply with slot number.`
       : `No available slots in the next ${daysAhead} days.\n\nOur agent will contact you!`;
+
+    // Save slot map to leads table for use in create_booking
+if (req.body.leadId) {
+  const { error: slotSaveError } = await supabase
+    .from('leads')
+    .update({
+      available_slots: JSON.stringify(slotMap)
+    })
+    .eq('id', req.body.leadId);
+
+  if (slotSaveError) {
+    console.error('Error saving slot map:', slotSaveError);
+  }
+}
 
     res.json({
       success: true,
