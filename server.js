@@ -356,7 +356,31 @@ if (result.action === 'cancel_booking' && lead) {
   result.tenant_calendar_id = tenant.google_calendar_id;
 }
 
-    res.json(result);
+    // Enrich every response with lead and tenant
+// details so Make can access them in all routes
+if (lead) {
+  result.lead_id = result.lead_id || lead.id;
+  result.lead_name = result.lead_name || lead.name;
+  result.lead_phone = lead.phone;
+  result.tenant_id = result.tenant_id || tenant.id;
+  result.tenant_calendar_id = tenant.google_calendar_id;
+}
+
+// Get agent details for this tenant
+const { data: agentData } = await supabase
+  .from('agents')
+  .select('agent_name, phone, email')
+  .eq('tenant_id', tenant.id)
+  .eq('active', true)
+  .single();
+
+if (agentData) {
+  result.agent_name = agentData.agent_name;
+  result.agent_phone = agentData.phone;
+  result.agent_email = agentData.email;
+}
+
+res.json(result);
 
   } catch (error) {
     console.error('Error in handle-message:', error);
