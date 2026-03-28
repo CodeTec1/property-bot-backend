@@ -7,6 +7,7 @@ const handleMessage = require('./handleMessage');
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 // Configure Google Calendar
 const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT || '{}');
