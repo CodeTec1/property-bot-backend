@@ -362,6 +362,7 @@ if (lead) {
   result.lead_id = result.lead_id || lead.id;
   result.lead_name = result.lead_name || lead.name;
   result.lead_phone = lead.phone;
+  result.lead_budget = lead.budget;
   result.last_viewed_property = lead.last_viewed_property || null;
   result.tenant_id = result.tenant_id || tenant.id;
   result.tenant_calendar_id = tenant.google_calendar_id;
@@ -879,6 +880,7 @@ app.post('/api/create-booking', async (req, res) => {
       .select(`
         property_name,
         address,
+        price,
         agents (
           agent_name,
           phone,
@@ -993,7 +995,8 @@ app.post('/api/create-booking', async (req, res) => {
         date: slotStart.toLocaleDateString('en-KE', { timeZone: timezone }),
         time: slotStart.toLocaleTimeString('en-KE', { timeZone: timezone }),
         property: propertyName,
-        address: propertyAddress
+        address: propertyAddress,
+        price: property.price
       }
     });
 
