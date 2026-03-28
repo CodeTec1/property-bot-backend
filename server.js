@@ -397,7 +397,7 @@ res.json(result);
 // ============================================
 app.post('/api/locations', async (req, res) => {
   try {
-    const { tenantId, interest } = req.body;
+    const { tenantId, interest, leadId } = req.body;
 
     if (!tenantId || !interest) {
       return res.status(400).json({ 
@@ -417,17 +417,30 @@ const { data, error } = await supabase
   .ilike('type', normalizedInterest)
   .eq('available', true);
 
-    if (error) throw error;
+if (error) throw error;
 
-    const locations = [...new Set(data.map(r => r.location).filter(Boolean))].sort();
-    const formatted = locations.map(loc => `• ${loc}`).join('\n');
+const locations = [...new Set(data.map(r => r.location).filter(Boolean))].sort();
+const formatted = locations.map(loc => `• ${loc}`).join('\n');
 
-    res.json({
-      success: true,
-      locations: locations,
-      formatted: formatted || "• No locations available",
-      count: locations.length
-    });
+// Update lead conversation stage to asked_location
+// so handleMessage knows to expect a location next
+if (leadId) {
+  const { error: updateError } = await supabase
+    .from('leads')
+    .update({ conversation_stage: 'asked_location' })
+    .eq('id', leadId);
+
+  if (updateError) {
+    console.error('Error updating lead stage:', updateError);
+  }
+}
+
+res.json({
+  success: true,
+  locations: locations,
+  formatted: formatted || "• No locations available",
+  count: locations.length
+});
 
   } catch (error) {
     console.error('Error in locations:', error);
@@ -440,7 +453,7 @@ const { data, error } = await supabase
 // ============================================
 app.post('/api/sizes', async (req, res) => {
   try {
-    const { tenantId, interest, location } = req.body;
+    const { tenantId, interest, location, leadId } = req.body;
 
     if (!tenantId || !interest || !location) {
       return res.status(400).json({ 
@@ -483,6 +496,19 @@ const { data, error } = await supabase
       options = beds.map(b => `• ${b} bedroom${b > 1 ? 's' : ''}`).join('\n');
       nextStage = 'asked_size';
     }
+
+    // Update lead conversation stage
+if (leadId) {
+  const nextStage = interest === 'Land' ? 'asked_land_size' : 'asked_size';
+  const { error: updateError } = await supabase
+    .from('leads')
+    .update({ conversation_stage: nextStage })
+    .eq('id', leadId);
+
+  if (updateError) {
+    console.error('Error updating lead stage:', updateError);
+  }
+}
 
     res.json({
       success: true,
