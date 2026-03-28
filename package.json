@@ -13,7 +13,8 @@
     "body-parser": "^2.2.2",
     "dotenv": "^17.2.4",
     "express": "^4.22.1",
-    "googleapis": "^171.4.0"
+    "googleapis": "^171.4.0",
+    "twilio": "^5.13.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

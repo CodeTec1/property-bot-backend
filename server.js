@@ -106,6 +106,12 @@ app.get('/', (req, res) => {
 });
 
 // ============================================
+// WhatsApp Webhook
+// ============================================
+app.use('/api/webhook', require('./webhook'));
+
+
+// ============================================
 // ENDPOINT 1: Handle Conversation Logic
 // ============================================
 app.post('/api/handle-message', async (req, res) => {
