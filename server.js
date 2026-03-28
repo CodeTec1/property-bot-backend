@@ -406,12 +406,16 @@ app.post('/api/locations', async (req, res) => {
       });
     }
 
-    const { data, error } = await supabase
-      .from('properties')
-      .select('location')
-      .eq('id', tenantId)
-      .eq('type', interest)
-      .eq('available', true);
+    // Capitalize first letter to match database format
+// Handles: rent → Rent, buy → Buy, land → Land
+const normalizedInterest = interest.charAt(0).toUpperCase() + interest.slice(1).toLowerCase();
+
+const { data, error } = await supabase
+  .from('properties')
+  .select('location')
+  .eq('tenant_id', tenantId)
+  .ilike('type', normalizedInterest)
+  .eq('available', true);
 
     if (error) throw error;
 
@@ -445,14 +449,16 @@ app.post('/api/sizes', async (req, res) => {
       });
     }
 
-    const { data, error } = await supabase
-      .from('properties')
-      .select('bedrooms, plot_size, type')
-      .eq('id', tenantId)
-      .eq('type', interest)
-      .eq('location', location)
-      .eq('available', true);
+    const normalizedInterest = interest.charAt(0).toUpperCase() + interest.slice(1).toLowerCase();
 
+const { data, error } = await supabase
+  .from('properties')
+  .select('bedrooms, plot_size, type')
+  .eq('tenant_id', tenantId)
+  .ilike('type', normalizedInterest)
+  .eq('location', location)
+  .eq('available', true);
+  
     if (error) throw error;
 
     if (data.length === 0) {
@@ -506,17 +512,21 @@ app.post('/api/search-properties', async (req, res) => {
       });
     }
 
+    // Normalize interest and location to handle case differences
+    const normalizedInterest = interest.charAt(0).toUpperCase() + interest.slice(1).toLowerCase();
+    const normalizedLocation = location.charAt(0).toUpperCase() + location.slice(1).toLowerCase();
+
     let query = supabase
       .from('properties')
       .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url')
-      .eq('id', tenantId)
-      .eq('type', interest)
-      .eq('location', location)
+      .eq('tenant_id', tenantId)
+      .ilike('type', normalizedInterest)
+      .ilike('location', normalizedLocation)
       .eq('available', true)
       .order('price', { ascending: true })
       .limit(3);
 
-    if (interest === 'Land') {
+    if (normalizedInterest === 'Land') {
       const cleanPlotSize = plotSize.replace(/\s+/g, '').toLowerCase();
       query = query.ilike('plot_size', `%${cleanPlotSize}%`);
     } else {
@@ -533,11 +543,21 @@ app.post('/api/search-properties', async (req, res) => {
     if (error) throw error;
 
     if (data.length === 0) {
+      // Get agent details for this tenant
+      const { data: agent } = await supabase
+        .from('agents')
+        .select('agent_name, phone')
+        .eq('tenant_id', tenantId)
+        .eq('active', true)
+        .single();
+
       return res.json({
         success: false,
         properties: [],
         count: 0,
-        message: `Sorry, no ${interest.toLowerCase()} properties found in ${location} matching your criteria.`
+        message: `Sorry, no ${normalizedInterest.toLowerCase()} properties found in ${normalizedLocation} matching your criteria.`,
+        agentName: agent?.agent_name || null,
+        agentPhone: agent?.phone || null
       });
     }
 
