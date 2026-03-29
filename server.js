@@ -681,7 +681,7 @@ app.post('/api/available-slots-v2', async (req, res) => {
     }));
 
     // 4. GENERATE FREE SLOTS
-    const minSlotTime = new Date(now.getTime() + (60 * 60 * 1000));
+    const minSlotTime = new Date(now.getTime() + (4 * 60 * 60 * 1000));
     const freeSlots = [];
     const MAX_SLOTS = 7;
     const KENYA_OFFSET_HOURS = 3;
@@ -796,6 +796,10 @@ if (req.body.leadId) {
 // ============================================
 app.post('/api/create-booking', async (req, res) => {
   try {
+    console.log('========================================');
+    console.log('CREATE BOOKING REQUEST RECEIVED');
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+
     const { leadId, propertyId, slotNumber, slotMap, leadName, leadPhone, tenantId } = req.body;
 
     // Validate required fields
@@ -807,6 +811,7 @@ app.post('/api/create-booking', async (req, res) => {
     if (!tenantId) missingFields.push('tenantId');
 
     if (missingFields.length > 0) {
+      console.log('Missing fields:', missingFields);
       return res.status(400).json({
         success: false,
         error: 'Missing required fields: ' + missingFields.join(', ')
@@ -820,25 +825,42 @@ app.post('/api/create-booking', async (req, res) => {
       .eq('id', tenantId)
       .single();
 
-    if (tenantError) throw tenantError;
+    if (tenantError) {
+      console.error('Tenant fetch error:', tenantError);
+      throw tenantError;
+    }
 
     const calendarId = tenant.google_calendar_id;
     const timezone = tenant.timezone || 'Africa/Nairobi';
     const slotDuration = parseInt(tenant.slot_duration || 60);
     const companyName = tenant.company_name;
 
+    console.log('Tenant found:', companyName);
+    console.log('Slot number received:', slotNumber);
+    console.log('Slot map received:', slotMap);
+
     // 2. PARSE SLOT MAP
     let slots = slotMap;
     if (typeof slotMap === 'string') {
       try {
         slots = JSON.parse(slotMap);
+        console.log('Slot map parsed successfully');
+        console.log('Available slot keys:', Object.keys(slots));
       } catch (err) {
+        console.error('Failed to parse slot map:', err.message);
         return res.status(400).json({ success: false, error: 'Invalid slot map format' });
       }
     }
 
-    const slotData = slots[slotNumber];
+    // Convert slotNumber to string for lookup
+    const slotKey = slotNumber.toString();
+    console.log('Looking up slot key:', slotKey);
+
+    const slotData = slots[slotKey];
+    console.log('Slot data found:', slotData);
+
     if (!slotData || !slotData.includes('|')) {
+      console.error('Invalid slot. Available keys:', Object.keys(slots));
       return res.status(400).json({
         success: false,
         error: 'Invalid slot number. Available: ' + Object.keys(slots).join(', ')
@@ -849,8 +871,13 @@ app.post('/api/create-booking', async (req, res) => {
     const slotStart = new Date(startTime);
     const slotEnd = new Date(endTime);
 
+    console.log('Slot start UTC:', slotStart.toISOString());
+    console.log('Slot end UTC:', slotEnd.toISOString());
+    console.log('Slot start Kenya:', slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }));
+
     // 3. COLLISION DETECTION
-    // Check Google Calendar
+    console.log('Checking for conflicts...');
+
     const calendarConflicts = await calendar.events.list({
       calendarId: calendarId,
       timeMin: slotStart.toISOString(),
@@ -859,9 +886,9 @@ app.post('/api/create-booking', async (req, res) => {
       singleEvents: true
     });
 
-    const calendarHasConflict = calendarConflicts.data.items && calendarConflicts.data.items.length > 0;
+    const calendarHasConflict = calendarConflicts.data.items &&
+      calendarConflicts.data.items.length > 0;
 
-    // Check Supabase bookings table
     const { data: conflictingBookings, error: conflictError } = await supabase
       .from('bookings')
       .select('id')
@@ -875,13 +902,19 @@ app.post('/api/create-booking', async (req, res) => {
 
     const supabaseHasConflict = conflictingBookings.length > 0;
 
+    console.log('Calendar conflict:', calendarHasConflict);
+    console.log('Supabase conflict:', supabaseHasConflict);
+
     if (calendarHasConflict || supabaseHasConflict) {
+      console.log('Slot is taken');
       return res.json({
         success: false,
         slotTaken: true,
         message: "Sorry, that time slot was just taken by another client.\n\nPlease select another time or reply HI to search again."
       });
     }
+
+    console.log('Slot is free, proceeding...');
 
     // 4. GET PROPERTY AND AGENT DETAILS
     const { data: property, error: propertyError } = await supabase
@@ -899,7 +932,10 @@ app.post('/api/create-booking', async (req, res) => {
       .eq('id', propertyId)
       .single();
 
-    if (propertyError) throw propertyError;
+    if (propertyError) {
+      console.error('Property fetch error:', propertyError);
+      throw propertyError;
+    }
 
     const propertyName = property.property_name;
     const propertyAddress = property.address;
@@ -907,7 +943,11 @@ app.post('/api/create-booking', async (req, res) => {
     const agentPhone = property.agents?.phone || null;
     const agentEmail = property.agents?.email || null;
 
+    console.log('Property found:', propertyName);
+
     // 5. CREATE GOOGLE CALENDAR EVENT
+    console.log('Creating calendar event...');
+
     const event = {
       summary: `${companyName} - Property Viewing`,
       description: `Property: ${propertyName}\nClient: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}\n\nAgent: ${agentName || 'N/A'}\nAgent Phone: ${agentPhone || 'N/A'}`,
@@ -928,6 +968,7 @@ app.post('/api/create-booking', async (req, res) => {
         calendarId: calendarId,
         resource: event
       });
+      console.log('Calendar event created:', calendarEvent.data.id);
     } catch (calErr) {
       console.error('Calendar creation failed:', calErr.message);
       return res.status(500).json({
@@ -936,11 +977,14 @@ app.post('/api/create-booking', async (req, res) => {
       });
     }
 
-
     // 6. CREATE SUPABASE BOOKING
-    console.log('Booking time being saved:', slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }));
-    console.log('Slot start UTC:', slotStart.toISOString());
-    console.log('Timezone:', timezone);
+    console.log('Creating Supabase booking...');
+    console.log('Booking time being saved:', slotStart.toLocaleTimeString('en-KE', {
+      timeZone: timezone,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    }));
 
     const { data: bookingRecord, error: bookingError } = await supabase
       .from('bookings')
@@ -951,7 +995,12 @@ app.post('/api/create-booking', async (req, res) => {
         start_datetime: slotStart.toISOString(),
         end_datetime: slotEnd.toISOString(),
         date: slotStart.toISOString().split('T')[0],
-        time: slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }),
+        time: slotStart.toLocaleTimeString('en-KE', {
+          timeZone: timezone,
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        }),
         status: 'Scheduled',
         google_event_id: calendarEvent.data.id,
         agent_name: agentName || null,
@@ -961,6 +1010,7 @@ app.post('/api/create-booking', async (req, res) => {
       .single();
 
     if (bookingError) {
+      console.error('Supabase booking error:', bookingError);
       // Cleanup calendar event if booking fails
       await calendar.events.delete({
         calendarId: calendarId,
@@ -968,6 +1018,9 @@ app.post('/api/create-booking', async (req, res) => {
       });
       throw bookingError;
     }
+
+    console.log('Booking created successfully:', bookingRecord.id);
+    console.log('========================================');
 
     // 7. FORMAT MESSAGES
     const durationText = slotDuration >= 60
@@ -977,8 +1030,18 @@ app.post('/api/create-booking', async (req, res) => {
     const confirmMessage =
       `✅ Viewing Confirmed!\n\n` +
       `Property: ${propertyName}\n` +
-      `Date: ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, year: 'numeric', month: 'numeric', day: 'numeric' })}\n` +
-      `Time: ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
+      `Date: ${slotStart.toLocaleDateString('en-KE', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric'
+      })}\n` +
+      `Time: ${slotStart.toLocaleTimeString('en-KE', {
+        timeZone: timezone,
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      })}\n` +
       `Location: ${propertyAddress}\n\n` +
       (agentName ? `Agent: ${agentName}\n` : '') +
       (agentPhone ? `Agent Phone: ${agentPhone}\n\n` : '\n') +
@@ -990,8 +1053,19 @@ app.post('/api/create-booking', async (req, res) => {
       `Phone: ${leadPhone}\n\n` +
       `Property: ${propertyName}\n` +
       `Address: ${propertyAddress}\n\n` +
-      `Date: ${slotStart.toLocaleDateString('en-KE', { timeZone: timezone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n` +
-      `Time: ${slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true })}\n` +
+      `Date: ${slotStart.toLocaleDateString('en-KE', {
+        timeZone: timezone,
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      })}\n` +
+      `Time: ${slotStart.toLocaleTimeString('en-KE', {
+        timeZone: timezone,
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      })}\n` +
       `Duration: ${durationText}\n\n` +
       `Added to your calendar.`;
 
@@ -1007,7 +1081,12 @@ app.post('/api/create-booking', async (req, res) => {
       agentName: agentName,
       slotDetails: {
         date: slotStart.toLocaleDateString('en-KE', { timeZone: timezone }),
-        time: slotStart.toLocaleTimeString('en-KE', { timeZone: timezone }),
+        time: slotStart.toLocaleTimeString('en-KE', {
+          timeZone: timezone,
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        }),
         property: propertyName,
         address: propertyAddress,
         price: property.price
