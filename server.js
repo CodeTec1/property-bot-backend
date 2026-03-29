@@ -1028,25 +1028,23 @@ app.post('/api/cancel-booking', async (req, res) => {
 
     // 1. FIND ACTIVE BOOKING FOR THIS LEAD
     const { data: bookings, error: bookingError } = await supabase
-      .from('bookings')
-      .select(`
-        id,
-        google_event_id,
-        start_datetime,
-        property_id,
-        properties (
-          property_name,
-          address,
-          agents (
-            agent_name,
-            phone
-          )
-        )
-      `)
-      .eq('lead_id', leadId)
-      .eq('status', 'Scheduled')
-      .order('start_datetime', { ascending: false })
-      .limit(1);
+  .from('bookings')
+  .select(`
+    id,
+    google_event_id,
+    start_datetime,
+    end_datetime,
+    property_id,
+    properties (
+      property_name,
+      address,
+      agents (agent_name, phone)
+    )
+  `)
+  .eq('lead_id', leadId)
+  .eq('status', 'Scheduled')
+  .order('created_at', { ascending: false })
+  .limit(1);
 
     if (bookingError) throw bookingError;
 
@@ -1112,12 +1110,11 @@ app.post('/api/cancel-booking', async (req, res) => {
 
     // 6. FORMAT MESSAGES
     const userMessage =
-      `Viewing Cancelled\n\n` +
-      `Your viewing has been cancelled:\n\n` +
-      `Property: ${propertyName}\n` +
-      `Was scheduled for: ${scheduledTime.toLocaleDateString('en-KE')}\n` +
-      `Time: ${scheduledTime.toLocaleTimeString('en-KE', { hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
-      `If you'd like to reschedule, reply HI to start over.`;
+  `Viewing Cancelled\n\n` +
+  `Property: ${propertyName}\n` +
+  `Was scheduled for: ${scheduledTime.toLocaleDateString('en-KE', { timeZone: 'Africa/Nairobi' })}\n` +
+  `Time: ${scheduledTime.toLocaleTimeString('en-KE', { timeZone: 'Africa/Nairobi', hour: 'numeric', minute: '2-digit', hour12: true })}\n\n` +
+  `Reply HI to search for another property.`;
 
     const agentMessage =
       `Viewing Cancelled\n\n` +
