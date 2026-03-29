@@ -502,13 +502,11 @@ router.post('/', async (req, res) => {
           .update({ conversation_stage: nextStage })
           .eq('id', lead.id);
 
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `How many bedrooms are you looking for?\n\n` +
-          `Available options:\n\n${options}\n\n` +
-          `Just type the number.`
-        );
+        const sizeQuestion = normalizedInterest === 'Land'
+  ? `What size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
+  : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\nJust type the number.`;
+
+await sendMessage(tenantWhatsApp, from, sizeQuestion);
       } else {
         await sendMessage(
           tenantWhatsApp,

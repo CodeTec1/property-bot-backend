@@ -936,7 +936,12 @@ app.post('/api/create-booking', async (req, res) => {
       });
     }
 
+
     // 6. CREATE SUPABASE BOOKING
+    console.log('Booking time being saved:', slotStart.toLocaleTimeString('en-KE', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true }));
+    console.log('Slot start UTC:', slotStart.toISOString());
+    console.log('Timezone:', timezone);
+
     const { data: bookingRecord, error: bookingError } = await supabase
       .from('bookings')
       .insert({
