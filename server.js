@@ -4,6 +4,8 @@ const express = require('express');
 const supabase = require('./supabase');
 const { google } = require('googleapis');
 const handleMessage = require('./handleMessage');
+const cron = require('node-cron');
+const { runNotifications } = require('./notifications');
 
 const app = express();
 app.use(express.json());
@@ -1636,6 +1638,16 @@ app.post('/api/mark-awaiting-followup', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// ============================================
+// Schedule notifications to run every hour
+// ============================================
+cron.schedule('0 * * * *', async () => {
+  console.log('Cron job triggered - running notifications');
+  await runNotifications();
+});
+
+console.log('Notification scheduler started - runs every hour');
 
 // ============================================
 // Start Server
