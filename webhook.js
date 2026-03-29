@@ -173,34 +173,7 @@ async function searchProperties(tenantId, interest, location, size) {
 }
 
 // ============================================
-// Helper: Get property by number from search
-// ============================================
-async function getPropertyByNumber(tenantId, interest, location, propertyNumber) {
-  try {
-    const normalizedInterest = normalize(interest);
-    const normalizedLocation = normalize(location);
-
-    const { data: properties } = await supabase
-      .from('properties')
-      .select('id, property_name, price')
-      .eq('tenant_id', tenantId)
-      .ilike('type', normalizedInterest)
-      .ilike('location', normalizedLocation)
-      .eq('available', true)
-      .order('price', { ascending: true })
-      .limit(propertyNumber);
-
-    if (!properties || properties.length < propertyNumber) return null;
-    return properties[propertyNumber - 1];
-
-  } catch (error) {
-    console.error('Error in getPropertyByNumber:', error);
-    return null;
-  }
-}
-
-// ============================================
-// Helper: Format Kenya time
+// Helper: Format Kenya date
 // ============================================
 function formatKenyaDate(isoString) {
   const date = new Date(isoString);
@@ -212,6 +185,9 @@ function formatKenyaDate(isoString) {
   });
 }
 
+// ============================================
+// Helper: Format Kenya time
+// ============================================
 function formatKenyaTime(isoString) {
   const date = new Date(isoString);
   return date.toLocaleTimeString('en-KE', {
@@ -260,7 +236,7 @@ router.post('/', async (req, res) => {
       ? lead.phone.replace('whatsapp:', '').trim()
       : from.replace('whatsapp:', '').trim();
 
-    // Get current time in Kenya for templates
+    // Get current Kenya time for templates
     const now = new Date();
     const kenyaTime = now.toLocaleTimeString('en-KE', {
       timeZone: 'Africa/Nairobi',
@@ -347,6 +323,26 @@ router.post('/', async (req, res) => {
         );
 
         if (properties.length > 0) {
+          // Save search results to lead so booking uses exact same properties
+          const searchResultsToSave = properties.map((p, i) => ({
+            number: i + 1,
+            id: p.id,
+            name: p.property_name,
+            price: p.price,
+            location: p.location,
+            address: p.address,
+            bedrooms: p.bedrooms,
+            plot_size: p.plot_size,
+            type: p.type,
+            photo_url: p.photo_url
+          }));
+
+          await supabase
+            .from('leads')
+            .update({ search_results: searchResultsToSave })
+            .eq('id', lead.id);
+
+          // Send each property one by one
           for (let i = 0; i < properties.length; i++) {
             const property = properties[i];
             const propertyMessage =
@@ -371,7 +367,7 @@ router.post('/', async (req, res) => {
             if (i < properties.length - 1) await delay(2000);
           }
         } else {
-          // No properties found — notify user
+          // No properties found
           await sendMessage(
             tenantWhatsApp,
             from,
@@ -502,11 +498,13 @@ router.post('/', async (req, res) => {
           .update({ conversation_stage: nextStage })
           .eq('id', lead.id);
 
+        // Different question for land vs house
         const sizeQuestion = normalizedInterest === 'Land'
-  ? `What size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
-  : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\nJust type the number.`;
+          ? `What plot size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
+          : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\nJust type the number.`;
 
-await sendMessage(tenantWhatsApp, from, sizeQuestion);
+        await sendMessage(tenantWhatsApp, from, sizeQuestion);
+
       } else {
         await sendMessage(
           tenantWhatsApp,
@@ -531,13 +529,15 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
 
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Find the actual property
-      const selectedProperty = await getPropertyByNumber(
-        tenant.id,
-        lead.interest,
-        lead.location,
-        result.propertyNumber
-      );
+      // Get property from saved search results
+      const { data: freshLead } = await supabase
+        .from('leads')
+        .select('search_results')
+        .eq('id', lead.id)
+        .single();
+
+      const searchResults = freshLead?.search_results || [];
+      const selectedProperty = searchResults.find(p => p.number === result.propertyNumber);
 
       if (!selectedProperty) {
         await sendMessage(
@@ -547,6 +547,8 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
         );
         return;
       }
+
+      console.log('Selected property from saved results:', selectedProperty.name, selectedProperty.id);
 
       // Get available slots
       const slotsResponse = await fetch(
@@ -568,7 +570,7 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
         .from('leads')
         .update({
           available_slots: slotsData.slotMap,
-          last_viewed_property: selectedProperty.property_name,
+          last_viewed_property: selectedProperty.name,
           selected_property_id: selectedProperty.id
         })
         .eq('id', lead.id);
@@ -583,8 +585,16 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
     if (result.action === 'create_booking' && lead) {
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Use saved property ID from lead record
-      const propertyId = lead.selected_property_id;
+      // Fetch fresh lead data to get latest saved property ID and slot map
+      const { data: freshLead } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('id', lead.id)
+        .single();
+
+      const propertyId = freshLead?.selected_property_id;
+      const slotMap = freshLead?.available_slots || '{}';
+      const leadName = freshLead?.name || lead.name;
 
       if (!propertyId) {
         await sendMessage(
@@ -594,8 +604,6 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
         );
         return;
       }
-
-      const slotMap = lead.available_slots || '{}';
 
       const bookingResponse = await fetch(
         `https://property-bot-backend.onrender.com/api/create-booking`,
@@ -608,7 +616,7 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
             propertyId: propertyId,
             slotNumber: result.selectedTime.toString(),
             slotMap: slotMap,
-            leadName: lead.name,
+            leadName: leadName,
             leadPhone: from
           })
         }
@@ -630,12 +638,12 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
           agentPhone,
           TEMPLATES.BOOKING_CONFIRMED,
           {
-            "1": lead.name || 'Unknown',
+            "1": leadName || 'Unknown',
             "2": cleanLeadPhone,
             "3": bookingData.slotDetails?.property || 'N/A',
             "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
-            "5": `KES ${lead.budget || 'N/A'}`,
-            "6": lead.location || 'N/A',
+            "5": `KES ${freshLead?.budget || 'N/A'}`,
+            "6": freshLead?.location || 'N/A',
             "7": bookingData.slotDetails?.date || 'N/A',
             "8": bookingData.slotDetails?.time || 'N/A'
           }
@@ -710,7 +718,6 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
       );
       const cancelData = await cancelResponse.json();
 
-      // Notify user
       await sendMessage(
         tenantWhatsApp,
         from,
@@ -787,7 +794,7 @@ await sendMessage(tenantWhatsApp, from, sizeQuestion);
   } catch (error) {
     console.error('Error in webhook:', error);
 
-    // Safety net
+    // Safety net — notify user and agent if anything fails
     try {
       const { tenant } = await getTenantAndLead(to, from);
       if (tenant) {
