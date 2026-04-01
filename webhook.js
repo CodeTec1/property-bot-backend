@@ -310,7 +310,7 @@ router.post('/', async (req, res) => {
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
       // Then search properties if needed
-      if (result.searchProperties) {
+    if (result.searchProperties) {
         const searchInterest = updateData.interest || lead.interest;
         const searchLocation = updateData.location || lead.location;
         const searchSize = updateData.size || lead.size;
@@ -325,7 +325,6 @@ router.post('/', async (req, res) => {
         );
 
         if (properties.length > 0) {
-          // Save search results to lead so booking uses exact same properties
           const searchResultsToSave = properties.map((p, i) => ({
             number: i + 1,
             id: p.id,
@@ -344,59 +343,79 @@ router.post('/', async (req, res) => {
             .update({ search_results: searchResultsToSave })
             .eq('id', lead.id);
 
-          // Send each property one by one
+          console.log(`Sending ${properties.length} properties to user...`);
+
           for (let i = 0; i < properties.length; i++) {
             const property = properties[i];
-            const propertyMessage =
-  `PROPERTY ${i + 1} 🏡\n\n` +
-  `Property: ${property.property_name}\n` +
-  `Location: ${property.location}\n` +
-  `Price: KES ${Number(property.price).toLocaleString()}\n` +
-  `${property.type === 'Land'
-  ? `Size: ${property.plot_size}`
-  : property.bedrooms === 0
-    ? `Size: Studio`
-    : `Size: ${property.bedrooms} Bedroom${property.bedrooms > 1 ? 's' : ''}`
-}\n` +
-  `Address: ${property.address}\n` +
-  (property.completion_date ? `Completion: ${property.completion_date}\n` : '') +
-  (property.description ? `\n${property.description}\n` : '') +
-  `\nReply Property${i + 1} to book viewing.`;
 
-            await sendMessage(
-              tenantWhatsApp,
-              from,
-              propertyMessage,
-              property.photo_url || null
-            );
+            try {
+              const sizeText = property.type === 'Land'
+                ? `Size: ${property.plot_size}`
+                : property.bedrooms === 0
+                  ? `Size: Studio`
+                  : `Size: ${property.bedrooms} Bedroom${property.bedrooms > 1 ? 's' : ''}`;
 
-            if (i < properties.length - 1) await delay(2000);
+              const propertyMessage =
+                `PROPERTY ${i + 1}\n\n` +
+                `${property.property_name}\n` +
+                `Location: ${property.location}\n` +
+                `Price: KES ${Number(property.price || 0).toLocaleString()}\n` +
+                `${sizeText}\n` +
+                (property.sqm ? `SQM: ${property.sqm}\n` : '') +
+                `Address: ${property.address}\n` +
+                (property.completion_date ? `Completion: ${property.completion_date}\n` : '') +
+                (property.description ? `\n${property.description}\n` : '') +
+                `\nReply Property${i + 1} to book viewing.`;
+
+              console.log(`Sending property ${i + 1}: ${property.property_name}`);
+
+              await sendMessage(
+                tenantWhatsApp,
+                from,
+                propertyMessage,
+                property.photo_url || null
+              );
+
+              console.log(`Property ${i + 1} sent successfully`);
+
+              if (i < properties.length - 1) await delay(2000);
+
+            } catch (propError) {
+              console.error(`Error sending property ${i + 1}:`, propError.message);
+              continue;
+            }
           }
+
+          console.log('All properties sent successfully');
+
         } else {
-          // No properties found
+          console.log('No properties found - notifying user and agent');
+
           await sendMessage(
             tenantWhatsApp,
             from,
-            `Sorry, we could not find any properties matching your criteria.\n\n` +
+            `Sorry, we could not find any properties matching your criteria at the moment.\n\n` +
+            `Our agent will contact you shortly to assist you personally.\n\n` +
             `Agent: ${agentName}\n` +
             `Phone: ${agentPhone || 'N/A'}\n\n` +
-            `They will help you find your perfect property!\n\n` +
-            `Reply HI to start a new search.`
+            `You can also reply HI to start a new search.`
           );
 
-          // Notify agent via template
-          await sendTemplateToAgent(
-            tenantWhatsApp,
-            agentPhone,
-            TEMPLATES.NO_PROPERTY_FOUND,
-            {
-              "1": lead.name || 'Unknown',
-              "2": cleanLeadPhone,
-              "3": kenyaTime
-            }
-          );
+          if (agentPhone) {
+            await sendTemplateToAgent(
+              tenantWhatsApp,
+              agentPhone,
+              TEMPLATES.NO_PROPERTY_FOUND,
+              {
+                "1": lead.name || 'Unknown',
+                "2": cleanLeadPhone,
+                "3": kenyaTime
+              }
+            );
+          }
         }
       }
+
       return;
     }
 
