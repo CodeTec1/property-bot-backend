@@ -136,7 +136,7 @@ async function searchProperties(tenantId, interest, location, size) {
 
     let query = supabase
       .from('properties')
-      .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url')
+      .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url, description, completion_date, amenities, is_offplan')
       .eq('tenant_id', tenantId)
       .ilike('type', normalizedInterest)
       .ilike('location', normalizedLocation)
@@ -346,16 +346,18 @@ router.post('/', async (req, res) => {
           for (let i = 0; i < properties.length; i++) {
             const property = properties[i];
             const propertyMessage =
-              `PROPERTY ${i + 1} 🏡\n\n` +
-              `Property: ${property.property_name}\n` +
-              `Location: ${property.location}\n` +
-              `Price: KES ${Number(property.price).toLocaleString()}\n` +
-              `${property.type === 'Land'
-                ? `Size: ${property.plot_size}`
-                : `Size: ${property.bedrooms} Bedroom${property.bedrooms > 1 ? 's' : ''}`
-              }\n` +
-              `Address: ${property.address}\n\n` +
-              `Reply Property${i + 1} to book viewing.`;
+  `PROPERTY ${i + 1} 🏡\n\n` +
+  `Property: ${property.property_name}\n` +
+  `Location: ${property.location}\n` +
+  `Price: KES ${Number(property.price).toLocaleString()}\n` +
+  `${property.type === 'Land'
+    ? `Size: ${property.plot_size}`
+    : `Size: ${property.bedrooms} Bedroom${property.bedrooms > 1 ? 's' : ''}`
+  }\n` +
+  `Address: ${property.address}\n` +
+  (property.completion_date ? `Completion: ${property.completion_date}\n` : '') +
+  (property.description ? `\n${property.description}\n` : '') +
+  `\nReply Property${i + 1} to book viewing.`;
 
             await sendMessage(
               tenantWhatsApp,

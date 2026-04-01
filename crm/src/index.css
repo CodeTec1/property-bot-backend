@@ -1,3 +1,32 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg-primary: #0B0F1A;
+  --bg-secondary: #0d1117;
+  --bg-card: #111827;
+  --bg-card-hover: #161f30;
+  --accent: #00E5FF;
+  --accent-dim: #00E5FF18;
+  --accent-border: #00E5FF33;
+  --accent-glow: 0 0 20px #00E5FF33;
+  --text-primary: #ffffff;
+  --text-secondary: #C0C4C9;
+  --text-muted: #6b7280;
+  --border: #ffffff0f;
+  --border-accent: #00E5FF22;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #0088ff;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --shadow-card: 0 4px 24px rgba(0,0,0,0.3);
+  --shadow-glow: 0 0 40px #00E5FF15;
+  --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -5,24 +34,88 @@
 }
 
 body {
-  font-family: 'Segoe UI', sans-serif;
-  background-color: #0B0F1A;
-  color: #ffffff;
+  font-family: 'DM Sans', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
 }
 
-::-webkit-scrollbar {
-  width: 6px;
+h1, h2, h3, h4 {
+  font-family: 'Syne', sans-serif;
 }
 
-::-webkit-scrollbar-track {
-  background: #0B0F1A;
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--accent-border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+::selection { background: #00E5FF33; color: #fff; }
+
+input, textarea, select {
+  font-family: 'DM Sans', sans-serif;
 }
 
-::-webkit-scrollbar-thumb {
-  background: #00E5FF33;
-  border-radius: 3px;
+button {
+  font-family: 'DM Sans', sans-serif;
+  cursor: pointer;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #00E5FF;
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes countUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-up {
+  animation: fadeUp 0.4s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.fade-up-1 { animation-delay: 0.05s; }
+.fade-up-2 { animation-delay: 0.1s; }
+.fade-up-3 { animation-delay: 0.15s; }
+.fade-up-4 { animation-delay: 0.2s; }
+.fade-up-5 { animation-delay: 0.25s; }
+
+.glow-btn {
+  transition: var(--transition);
+}
+
+.glow-btn:hover {
+  box-shadow: 0 8px 32px #00E5FF44;
+  transform: translateY(-1px);
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition: var(--transition);
+}
+
+.card:hover {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-glow);
 }

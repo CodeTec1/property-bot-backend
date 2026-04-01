@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Leads from './pages/Leads'
 import Bookings from './pages/Bookings'
 import Properties from './pages/Properties'
+import Agents from './pages/Agents'
 
 export default function App() {
   const [user, setUser] = useState(null)
@@ -94,6 +95,10 @@ export default function App() {
           path="/properties"
           element={user ? <Properties user={user} /> : <Navigate to="/login" replace />}
         />
+        <Route
+  path="/agents"
+  element={user ? <Agents user={user} /> : <Navigate to="/login" replace />}
+/>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
