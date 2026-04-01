@@ -373,7 +373,7 @@ router.post('/', async (req, res) => {
   tenantWhatsApp,
   from,
   propertyMessage,
-  null  // temporarily disabled to test
+  property.photo_url || null
 );
 
               console.log(`Property ${i + 1} sent successfully`);
@@ -715,7 +715,7 @@ nextStage = 'asked_size';
           tenantWhatsApp,
           from,
           `Sorry, something went wrong with your booking.\n\n` +
-          `Our agent will contact you shortly.\n\n` +
+          `Contact our agent for assistance.\n\n` +
           `Agent: ${agentName}\n` +
           `Phone: ${agentPhone || 'N/A'}`
         );
