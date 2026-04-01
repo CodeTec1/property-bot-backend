@@ -35,10 +35,10 @@ export default function Properties({ user }) {
     photo_url: '',
     available: true,
     description: '',
-    amenities: '',
     completion_date: '',
     is_offplan: false,
     sqm: '',
+    project_name: '',
     agent_id: ''
   }
   const [form, setForm] = useState(emptyForm)
@@ -112,10 +112,10 @@ export default function Properties({ user }) {
       photo_url: property.photo_url || '',
       available: property.available ?? true,
       description: property.description || '',
-      amenities: property.amenities || '',
       completion_date: property.completion_date || '',
       is_offplan: property.is_offplan || false,
       sqm: property.sqm || '',
+      project_name: property.project_name || '',
       agent_id: property.agent_id || ''
     })
     setEditProperty(property)
@@ -169,11 +169,11 @@ export default function Properties({ user }) {
         photo_url: form.photo_url || null,
         available: form.available,
         description: form.description || null,
-        amenities: form.amenities || null,
         completion_date: form.completion_date || null,
         is_offplan: form.is_offplan,
         sqm: form.sqm ? parseFloat(form.sqm) : null,
         agent_id: form.agent_id || null,
+        project_name: form.project_name || null,
         tenant_id: tenantId
       }
 
@@ -922,6 +922,23 @@ export default function Properties({ user }) {
                 </div>
               </div>
 
+              {/* Project Name */}
+<div style={{ marginBottom: '20px' }}>
+  <label style={labelStyle}>Project Name</label>
+  <input
+    type="text"
+    placeholder="e.g. Vera Complex, Capital Heights (optional)"
+    value={form.project_name || ''}
+    onChange={e => setForm(prev => ({ ...prev, project_name: e.target.value }))}
+    style={inputStyle}
+    onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+    onBlur={e => e.target.style.borderColor = 'var(--border)'}
+  />
+  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+    For off-plan developments. Leave blank for standalone properties.
+  </div>
+</div>
+
               {/* Row 1 — Name and Type */}
               <div style={rowStyle}>
                 <div style={{ flex: 2 }}>
@@ -1098,20 +1115,7 @@ export default function Properties({ user }) {
                 </div>
               )}
 
-              {/* Amenities */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Amenities</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Swimming Pool, Gym, Parking, Generator"
-                  value={form.amenities}
-                  onChange={e => setForm(prev => ({ ...prev, amenities: e.target.value }))}
-                  style={inputStyle}
-                />
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  Separate with commas
-                </div>
-              </div>
+          
 
               {/* Description */}
               <div style={{ marginBottom: '20px' }}>

@@ -350,22 +350,33 @@ router.post('/', async (req, res) => {
 
             try {
               const sizeText = property.type === 'Land'
-                ? `Size: ${property.plot_size}`
-                : property.bedrooms === 0
-                  ? `Size: Studio`
-                  : `Size: ${property.bedrooms} Bedroom${property.bedrooms > 1 ? 's' : ''}`;
+  ? `${property.plot_size}`
+  : property.bedrooms === 0
+    ? `Studio`
+    : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
 
-              const propertyMessage =
-                `PROPERTY ${i + 1}\n\n` +
-                `${property.property_name}\n` +
-                `Location: ${property.location}\n` +
-                `Price: KES ${Number(property.price || 0).toLocaleString()}\n` +
-                `${sizeText}\n` +
-                (property.sqm ? `SQM: ${property.sqm}\n` : '') +
-                `Address: ${property.address}\n` +
-                (property.completion_date ? `Completion: ${property.completion_date}\n` : '') +
-                (property.description ? `\n${property.description}\n` : '') +
-                `\nReply Property${i + 1} to book viewing.`;
+const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
+const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
+
+const propertyMessage =
+  `🏢 *PROPERTY ${i + 1}*\n` +
+  `━━━━━━━━━━━━━━━━━━━━\n\n` +
+  (property.project_name
+    ? `*${property.project_name}*\n`
+    : '') +
+  `*${property.property_name}*\n\n` +
+  `📍 ${property.location}\n` +
+  `💰 ${priceFormatted}\n` +
+  `🛏 ${sizeText}${sqmText}\n` +
+  (property.completion_date
+    ? `🏗 Completion: ${property.completion_date}\n`
+    : '') +
+  `📮 ${property.address}\n` +
+  (property.description
+    ? `\n${property.description}\n`
+    : '') +
+  `\n━━━━━━━━━━━━━━━━━━━━\n` +
+  `Reply *Property${i + 1}* to book a viewing`;
 
               console.log(`Sending property ${i + 1}: ${property.property_name}`);
 
