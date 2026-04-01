@@ -138,7 +138,7 @@ async function searchProperties(tenantId, interest, location, size) {
 
     let query = supabase
       .from('properties')
-      .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url, description, completion_date, amenities, is_offplan')
+     .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url, description, completion_date, is_offplan, sqm, project_name')
       .eq('tenant_id', tenantId)
       .ilike('type', normalizedInterest)
       .ilike('location', normalizedLocation)
