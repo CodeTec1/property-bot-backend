@@ -142,7 +142,7 @@ async function searchProperties(tenantId, interest, location, size) {
       .ilike('location', normalizedLocation)
       .eq('available', true)
       .order('price', { ascending: true })
-      .limit(3);
+      .limit(7);
 
     if (normalizedInterest === 'Land') {
       const cleanPlotSize = size ? size.replace(/\s+/g, '').toLowerCase() : '';

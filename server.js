@@ -562,7 +562,7 @@ app.post('/api/search-properties', async (req, res) => {
       .ilike('location', normalizedLocation)
       .eq('available', true)
       .order('price', { ascending: true })
-      .limit(3);
+      .limit(7);
 
     if (normalizedInterest === 'Land') {
       const cleanPlotSize = plotSize.replace(/\s+/g, '').toLowerCase();

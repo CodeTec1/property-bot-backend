@@ -249,7 +249,7 @@ export default function Sidebar({ collapsed, setCollapsed }) {
         padding: collapsed ? '12px 0' : '12px'
       }}>
 
-        {/* Help link */}
+        {/* Help link 
         {!collapsed && (
           <div style={{
             padding: '10px 12px',
@@ -279,7 +279,7 @@ export default function Sidebar({ collapsed, setCollapsed }) {
             </svg>
             Help & Support
           </div>
-        )}
+        )} */}
 
         {/* Logout button */}
         <button
