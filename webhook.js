@@ -115,6 +115,8 @@ function normalize(text) {
 // ============================================
 function extractBedrooms(sizeStr) {
   if (!sizeStr) return null;
+  // Check for studio first
+  if (sizeStr.toString().toLowerCase().includes('studio')) return 0;
   const match = sizeStr.toString().match(/\d+/);
   return match ? parseInt(match[0]) : null;
 }
@@ -351,9 +353,11 @@ router.post('/', async (req, res) => {
   `Location: ${property.location}\n` +
   `Price: KES ${Number(property.price).toLocaleString()}\n` +
   `${property.type === 'Land'
-    ? `Size: ${property.plot_size}`
+  ? `Size: ${property.plot_size}`
+  : property.bedrooms === 0
+    ? `Size: Studio`
     : `Size: ${property.bedrooms} Bedroom${property.bedrooms > 1 ? 's' : ''}`
-  }\n` +
+}\n` +
   `Address: ${property.address}\n` +
   (property.completion_date ? `Completion: ${property.completion_date}\n` : '') +
   (property.description ? `\n${property.description}\n` : '') +
@@ -484,15 +488,20 @@ router.post('/', async (req, res) => {
           options = plots.map(p => `• ${p}`).join('\n');
           nextStage = 'asked_land_size';
         } else {
-          const beds = [
-            ...new Set(
-              sizeData
-                .map(r => parseInt(r.bedrooms))
-                .filter(n => !isNaN(n))
-            )
-          ].sort((a, b) => a - b);
-          options = beds.map(b => `• ${b} Bedroom${b > 1 ? 's' : ''}`).join('\n');
-          nextStage = 'asked_size';
+        const beds = [
+  ...new Set(
+    sizeData
+      .map(r => parseInt(r.bedrooms))
+      .filter(n => !isNaN(n))
+  )
+].sort((a, b) => a - b);
+
+options = beds.map(b => {
+  if (b === 0) return `• Studio`;
+  return `• ${b} Bedroom${b > 1 ? 's' : ''}`;
+}).join('\n');
+
+nextStage = 'asked_size';
         }
 
         await supabase

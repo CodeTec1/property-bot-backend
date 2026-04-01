@@ -602,18 +602,18 @@ export default function Properties({ user }) {
                   flexWrap: 'wrap',
                   marginBottom: '12px'
                 }}>
-                  {property.bedrooms && (
-                    <span style={{
-                      fontSize: '12px',
-                      color: 'var(--text-secondary)',
-                      background: 'var(--bg-primary)',
-                      border: '1px solid var(--border)',
-                      padding: '3px 10px',
-                      borderRadius: '6px'
-                    }}>
-                      🛏 {property.bedrooms} Bed{property.bedrooms > 1 ? 's' : ''}
-                    </span>
-                  )}
+                  {(property.bedrooms !== null && property.bedrooms !== undefined) && (
+  <span style={{
+    fontSize: '12px',
+    color: 'var(--text-secondary)',
+    background: 'var(--bg-primary)',
+    border: '1px solid var(--border)',
+    padding: '3px 10px',
+    borderRadius: '6px'
+  }}>
+    🛏 {property.bedrooms === 0 ? 'Studio' : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`}
+  </span>
+)}
                   {property.plot_size && (
                     <span style={{
                       fontSize: '12px',
@@ -962,15 +962,23 @@ export default function Properties({ user }) {
                 </div>
                 {form.type !== 'Land' ? (
                   <div style={{ flex: 1 }}>
-                    <label style={labelStyle}>Bedrooms</label>
-                    <input
-                      type="number"
-                      placeholder="e.g. 3"
-                      value={form.bedrooms}
-                      onChange={e => setForm(prev => ({ ...prev, bedrooms: e.target.value }))}
-                      style={inputStyle}
-                    />
-                  </div>
+  <label style={labelStyle}>Bedrooms</label>
+  <select
+    value={form.bedrooms}
+    onChange={e => setForm(prev => ({ ...prev, bedrooms: e.target.value }))}
+    style={inputStyle}
+  >
+    <option value="">Select...</option>
+    <option value="0">Studio</option>
+    <option value="1">1 Bedroom</option>
+    <option value="2">2 Bedrooms</option>
+    <option value="3">3 Bedrooms</option>
+    <option value="4">4 Bedrooms</option>
+    <option value="5">5 Bedrooms</option>
+    <option value="6">6 Bedrooms</option>
+    <option value="7">7 Bedrooms</option>
+  </select>
+</div>
                 ) : (
                   <div style={{ flex: 1 }}>
                     <label style={labelStyle}>Plot Size</label>

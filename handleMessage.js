@@ -380,59 +380,63 @@ Just type the area name (e.g., Westlands or Karen).`;
     // STAGE 5: SIZE (HOUSES)
     // ======================================
     if (stage === "asked_size") {
-      // Extract number of bedrooms
-      let bedroomsStr = message;
+  let bedroomsStr = message;
+  let bedrooms = null;
 
-      // Handle various formats
-      if (message.match(/(\d+)\s*bed/i)) {
-        bedroomsStr = message.match(/(\d+)\s*bed/i)[1];
-      } else if (message.match(/i (want|need) (\d+)/i)) {
-        bedroomsStr = message.match(/i (want|need) (\d+)/i)[2];
-      } else if (message.match(/^\d+$/)) {
-        bedroomsStr = message;
-      }
+  // Check for studio first
+  const isStudio = message.match(/stud/i);
 
-      const bedrooms = parseInt(bedroomsStr);
-
-      if (isNaN(bedrooms) || bedrooms < 1 || bedrooms > 20) {
-        response.action = "invalid";
-        response.replyMessage = `Please enter the number of bedrooms you need.
-
-Examples: 1, 2, 3, 4, etc.
-
-Just the number!`;
-        return response;
-      }
-
-      const finalInterest = lead.Interest || input.lead_interest || "Not specified";
-      const finalBudget = lead.Budget || input.lead_budget || "Not specified";
-      const finalLocation = lead.Location || input.lead_location || "Not specified";
-
-      response.action = "update";
-      response.updateFields = {
-        "Size": `${bedrooms} bedroom`,
-        "Conversation Stage": "completed",
-        "Status": "Contacted"
-      };
-
-      response.interest = finalInterest;
-      response.bedrooms = bedrooms;
-      response.requestedBedrooms = bedrooms;
-      response.location = finalLocation;
-      response.searchProperties = true;
-
-      response.replyMessage = `✅ Got it! Let me find the best matches for you...
-
-📋 Your preferences:
-• Interest: ${finalInterest}
-• Budget: KES ${finalBudget}
-• Location: ${finalLocation}
-• Bedrooms: ${bedrooms}
-
-Searching properties... 🔍`;
-
-      return response;
+  if (isStudio) {
+    bedrooms = 0;
+  } else {
+    if (message.match(/(\d+)\s*bed/i)) {
+      bedroomsStr = message.match(/(\d+)\s*bed/i)[1];
+    } else if (message.match(/i (want|need) (\d+)/i)) {
+      bedroomsStr = message.match(/i (want|need) (\d+)/i)[2];
+    } else if (message.match(/^\d+$/)) {
+      bedroomsStr = message;
     }
+    bedrooms = parseInt(bedroomsStr);
+  }
+
+  if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedrooms > 20) {
+    response.action = "invalid";
+    response.replyMessage =
+      `Please enter the number of bedrooms you need.\n\n` +
+      `Examples: Studio, 1, 2, 3, 4\n\n` +
+      `Just type Studio or the number!`;
+    return response;
+  }
+
+  const finalInterest = lead.Interest || input.lead_interest || "Not specified";
+  const finalBudget = lead.Budget || input.lead_budget || "Not specified";
+  const finalLocation = lead.Location || input.lead_location || "Not specified";
+  const displaySize = bedrooms === 0 ? 'Studio' : `${bedrooms} bedroom`;
+
+  response.action = "update";
+  response.updateFields = {
+    "Size": displaySize,
+    "Conversation Stage": "completed",
+    "Status": "Contacted"
+  };
+
+  response.interest = finalInterest;
+  response.bedrooms = bedrooms;
+  response.requestedBedrooms = bedrooms;
+  response.location = finalLocation;
+  response.searchProperties = true;
+
+  response.replyMessage =
+    `Got it! Let me find the best matches for you...\n\n` +
+    `Your preferences:\n` +
+    `Interest: ${finalInterest}\n` +
+    `Budget: KES ${finalBudget}\n` +
+    `Location: ${finalLocation}\n` +
+    `Size: ${displaySize}\n\n` +
+    `Searching properties...`;
+
+  return response;
+}
 
     // ======================================
     // STAGE 5B: LAND SIZE SELECTION

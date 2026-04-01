@@ -505,8 +505,11 @@ const { data, error } = await supabase
       nextStage = 'asked_land_size';
     } else {
       const beds = [...new Set(data.map(r => parseInt(r.bedrooms)).filter(n => !isNaN(n)))].sort((a, b) => a - b);
-      options = beds.map(b => `• ${b} bedroom${b > 1 ? 's' : ''}`).join('\n');
-      nextStage = 'asked_size';
+options = beds.map(b => {
+  if (b === 0) return `• Studio`;
+  return `• ${b} Bedroom${b > 1 ? 's' : ''}`;
+}).join('\n');
+nextStage = 'asked_size';
     }
 
     // Update lead conversation stage
