@@ -475,7 +475,11 @@ const propertyMessage =
         await sendMessage(
           tenantWhatsApp,
           from,
-          `Sorry, no locations available right now.\n\nReply HI to start over.`
+          `Sorry, no locations available for ${type} right now.\n\n` +
+            `Contact our agent for assistance.\n\n` +
+            `Agent: ${agentName}\n` +
+            `Phone: ${agentPhone || 'N/A'}\n\n` +
+            `You can also reply HI to start a new search.`
         );
       }
       return;
@@ -550,7 +554,11 @@ nextStage = 'asked_size';
         await sendMessage(
           tenantWhatsApp,
           from,
-          `Sorry, no properties available in ${location} right now.\n\nReply HI to start over.`
+          `Sorry, no properties available in ${location} right now.\n\n` + 
+          `Contact our agent for assistance.\n\n` +
+          `Agent: ${agentName}\n` +
+          `Phone: ${agentPhone || 'N/A'}\n\n` +
+          `You can also reply HI to start a new search.`
         );
       }
       return;
@@ -843,7 +851,7 @@ nextStage = 'asked_size';
           tenant.whatsapp_number,
           from,
           `Sorry, something went wrong on our end.\n\n` +
-          `Our agent will contact you shortly to assist you manually.`
+          `Our agent will contact you shortly to assist you.`
         );
 
         const { data: agentData } = await supabase
