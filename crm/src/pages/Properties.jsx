@@ -1118,24 +1118,44 @@ export default function Properties({ user }) {
           
 
               {/* Description */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={labelStyle}>Property Description</label>
-                <textarea
-                  placeholder="Enter the full property description that will be sent to potential buyers/renters on WhatsApp..."
-                  value={form.description}
-                  onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
-                  rows={6}
-                  style={{
-                    ...inputStyle,
-                    resize: 'vertical',
-                    minHeight: '120px',
-                    lineHeight: 1.6
-                  }}
-                />
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  This description will be sent to users on WhatsApp along with the property photo
-                </div>
-              </div>
+<div style={{ marginBottom: '20px' }}>
+  <label style={labelStyle}>Property Description</label>
+  <textarea
+    placeholder="Enter the full property description..."
+    value={form.description}
+    onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
+    rows={6}
+    style={{
+      ...inputStyle,
+      resize: 'vertical',
+      minHeight: '120px',
+      lineHeight: 1.6,
+      borderColor: form.description?.length > 3000
+        ? '#ef4444'
+        : 'var(--border)'
+    }}
+  />
+  <div style={{
+    display: 'flex',
+    justifyContent: 'space-between',
+    marginTop: '4px'
+  }}>
+    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+      This description will be sent to users on WhatsApp with the property photo.
+    </div>
+    <div style={{
+      fontSize: '11px',
+      fontWeight: '600',
+      color: form.description?.length > 3000
+        ? '#ef4444'
+        : form.description?.length > 2000
+          ? '#f59e0b'
+          : 'var(--text-muted)'
+    }}>
+      {form.description?.length || 0} chars
+    </div>
+  </div>
+</div>
 
               {/* Availability toggle */}
               <div style={{ marginBottom: '28px', display: 'flex', alignItems: 'center', gap: '12px' }}>
