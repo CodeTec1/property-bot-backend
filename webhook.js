@@ -380,12 +380,12 @@ const propertyMessage =
 
               console.log(`Sending property ${i + 1}: ${property.property_name}`);
 
-              await sendMessage(
-              tenantWhatsApp,
-              from,
-              propertyMessage,
-              property.photo_url || null
-            );
+             await sendMessage(
+  tenantWhatsApp,
+  from,
+  propertyMessage,
+  null  // temporarily disabled to test
+);
 
               console.log(`Property ${i + 1} sent successfully`);
 
