@@ -359,8 +359,8 @@ const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
 const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
 
 const propertyMessage =
-  `🏢 *PROPERTY ${i + 1}*\n` +
-  `━━━━━━━━━━━━━━━━━━━━\n\n` +
+   `🏢 *PROPERTY ${i + 1}*\n` +
+   `──────────\n\n` +
   (property.project_name
     ? `*${property.project_name}*\n`
     : '') +
@@ -375,17 +375,17 @@ const propertyMessage =
   (property.description
     ? `\n${property.description}\n`
     : '') +
-  `\n━━━━━━━━━━━━━━━━━━━━\n` +
+  `\n──────────\n` +
   `Reply *Property${i + 1}* to book a viewing`;
 
               console.log(`Sending property ${i + 1}: ${property.property_name}`);
 
-             await sendMessage(
-  tenantWhatsApp,
-  from,
-  propertyMessage,
-  null  // temporarily disabled to test
-);
+              await sendMessage(
+              tenantWhatsApp,
+              from,
+              propertyMessage,
+              property.photo_url || null
+            );
 
               console.log(`Property ${i + 1} sent successfully`);
 

@@ -427,13 +427,14 @@ Just type the area name (e.g., Westlands or Karen).`;
   response.searchProperties = true;
 
   response.replyMessage =
-    `Got it! Let me find the best matches for you...\n\n` +
-    `Your preferences:\n` +
-    `Interest: ${finalInterest}\n` +
-    `Budget: KES ${finalBudget}\n` +
-    `Location: ${finalLocation}\n` +
-    `Size: ${displaySize}\n\n` +
-    `Searching properties...`;
+    response.replyMessage =
+  `✅ Got it! Let me find the best matches for you...\n\n` +
+  `📋 Your preferences:\n` +
+  `• Interest: ${finalInterest}\n` +
+  `• Budget: KES ${finalBudget}\n` +
+  `• Location: ${finalLocation}\n` +
+  `• Size: ${displaySize}\n\n` +
+  `Searching properties... 🔍`;
 
   return response;
 }
