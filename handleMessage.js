@@ -261,7 +261,7 @@ Just your name is enough! 😊`;
       
       response.replyMessage = `Nice to meet you, ${name}! 👋
 
-What's your budget?
+What's your budget in KES?
 
 Examples:
 • 500000
@@ -319,17 +319,106 @@ Just the number is fine!`;
       // Get interest from lead record (in case it was set during intent detection)
       const interest = lead.Interest || input.lead_interest;
 
-      response.action = "fetch_locations";
-      response.updateFields = {
-        "Budget": budget.toString(),
-        "Conversation Stage": "fetching_locations"
-      };
+     response.action = "update";
+response.updateFields = {
+  "Budget": budget.toString(),
+  "Conversation Stage": "asked_offplan"
+};
 
-      response.interest = interest; // ← Pass the interest along!
-      response.replyMessage = "Great! 💰\n\nLet me check available areas... 🔍";
+response.replyMessage =
+  `Great! 💰\n\n` +
+  `Are you looking for a ready property or an off-plan development?\n\n` +
+  `1 - Ready (move in immediately)\n` +
+  `2 - Off-Plan (under construction)`;
 
-      return response;
+return response;
+}
+
+// ======================================
+// STAGE 3B: OFF-PLAN OR READY
+// ======================================
+if (stage === "asked_offplan") {
+  const validOptions = ['1', '2', 'ready', 'off-plan', 'offplan', 'off plan']
+  const isReady = message === '1' || message.toLowerCase().includes('ready')
+  const isOffplan = message === '2' ||
+    message.toLowerCase().includes('off-plan') ||
+    message.toLowerCase().includes('offplan') ||
+    message.toLowerCase().includes('off plan')
+
+  if (!isReady && !isOffplan) {
+    response.action = "invalid"
+    response.replyMessage =
+      `Please choose one of the options:\n\n` +
+      `1 - Ready (move in immediately)\n` +
+      `2 - Off-Plan (under construction)`
+    return response
+  }
+
+  if (isReady) {
+    response.action = "fetch_locations"
+    response.updateFields = {
+      "Conversation Stage": "fetching_locations"
     }
+    response.isOffplan = false
+    response.interest = lead.Interest || input.lead_interest
+    response.replyMessage = `Perfect! Let me check available areas... 🔍`
+    return response
+  }
+
+  if (isOffplan) {
+    response.action = "update"
+    response.updateFields = {
+      "Conversation Stage": "asked_completion"
+    }
+    response.replyMessage =
+      `When do you need it completed by?\n\n` +
+      `1 - By end of 2026\n` +
+      `2 - By end of 2027\n` +
+      `3 - By end of 2028\n` +
+      `4 - 2029 and beyond\n` +
+      `5 - Any completion date`
+    return response
+  }
+}
+
+// ======================================
+// STAGE 3C: COMPLETION DATE
+// ======================================
+if (stage === "asked_completion") {
+  const validChoices = ['1', '2', '3', '4', '5']
+
+  if (!validChoices.includes(message)) {
+    response.action = "invalid"
+    response.replyMessage =
+      `Please reply with a number:\n\n` +
+      `1 - By end of 2026\n` +
+      `2 - By end of 2027\n` +
+      `3 - By end of 2028\n` +
+      `4 - 2029 and beyond\n` +
+      `5 - Any completion date`
+    return response
+  }
+
+  const completionRanges = {
+    '1': '2026',
+    '2': '2027',
+    '3': '2028',
+    '4': '2029+',
+    '5': 'any'
+  }
+
+  const selectedRange = completionRanges[message]
+
+  response.action = "fetch_locations"
+  response.updateFields = {
+    "Conversation Stage": "fetching_locations"
+  }
+  response.isOffplan = true
+  response.completionRange = selectedRange
+  response.interest = lead.Interest || input.lead_interest
+  response.replyMessage = `Perfect! Let me check available areas... 🔍`
+  return response
+}
 
     // ======================================
     // STAGE 4: LOCATION (Triggers size fetch)
