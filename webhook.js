@@ -124,7 +124,7 @@ function extractBedrooms(sizeStr) {
 // ============================================
 // Helper: Search properties from Supabase
 // ============================================
-async function searchProperties(tenantId, interest, location, size) {
+async function searchProperties(tenantId, interest, location, size, budget) {
   try {
     const normalizedInterest = normalize(interest);
     const normalizedLocation = normalize(location);
@@ -135,16 +135,31 @@ async function searchProperties(tenantId, interest, location, size) {
       normalizedLocation,
       size
     });
+    
+    // Parse budget - remove any non-numeric characters
+let budgetNumber = null;
+if (budget) {
+  const cleanBudget = budget.toString().replace(/[^0-9.]/g, '');
+  budgetNumber = parseFloat(cleanBudget);
+}
 
-    let query = supabase
-      .from('properties')
-     .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url, description, completion_date, is_offplan, sqm, project_name')
-      .eq('tenant_id', tenantId)
-      .ilike('type', normalizedInterest)
-      .ilike('location', normalizedLocation)
-      .eq('available', true)
-      .order('price', { ascending: true })
-      .limit(7);
+let query = supabase
+  .from('properties')
+  .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url, description, completion_date, is_offplan, sqm, project_name')
+  .eq('tenant_id', tenantId)
+  .ilike('type', normalizedInterest)
+  .ilike('location', normalizedLocation)
+  .eq('available', true)
+  .order('price', { ascending: true })
+  .limit(7);
+
+// Add budget filter with 20% flexibility
+// This means if user budget is 10M we show properties up to 12M
+// so we dont miss good matches that are slightly above budget
+if (budgetNumber && budgetNumber > 0) {
+  const flexibleBudget = budgetNumber * 1.2;
+  query = query.lte('price', flexibleBudget);
+}
 
     if (normalizedInterest === 'Land') {
       const cleanPlotSize = size ? size.replace(/\s+/g, '').toLowerCase() : '';
@@ -317,12 +332,13 @@ router.post('/', async (req, res) => {
 
         console.log('Searching with:', { searchInterest, searchLocation, searchSize });
 
-        const properties = await searchProperties(
-          tenant.id,
-          searchInterest,
-          searchLocation,
-          searchSize
-        );
+       const properties = await searchProperties(
+  tenant.id,
+  searchInterest,
+  searchLocation,
+  searchSize,
+  lead.budget
+);
 
         if (properties.length > 0) {
           const searchResultsToSave = properties.map((p, i) => ({
