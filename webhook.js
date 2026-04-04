@@ -56,6 +56,47 @@ async function getTenantAndLead(to, from) {
 }
 
 // ============================================
+// Helper: Create smart budget ranges from prices
+// ============================================
+function createBudgetRanges(minPrice, maxPrice) {
+  const ranges = {};
+  const spread = maxPrice - minPrice;
+
+  if (spread === 0) {
+    // All properties same price
+    ranges['1'] = { min: minPrice * 0.9, max: minPrice * 1.1, label: `Around KES ${Number(minPrice).toLocaleString()}` };
+    return ranges;
+  }
+
+  // Create up to 4 meaningful ranges
+  const step = spread / 4;
+  let rangeCount = 1;
+
+  for (let i = 0; i < 4; i++) {
+    const rangeMin = Math.floor((minPrice + (step * i)) / 1000000) * 1000000;
+    const rangeMax = Math.ceil((minPrice + (step * (i + 1))) / 1000000) * 1000000;
+
+    // Only add range if it contains actual properties
+    if (rangeMin !== rangeMax) {
+      ranges[rangeCount.toString()] = {
+        min: rangeMin,
+        max: rangeMax
+      };
+      rangeCount++;
+    }
+  }
+
+  // Always add "Any budget" as last option
+  ranges[rangeCount.toString()] = {
+    min: 0,
+    max: 999999999999,
+    label: 'Any budget'
+  };
+
+  return ranges;
+}
+
+// ============================================
 // Helper: Send regular Twilio message to user
 // ============================================
 async function sendMessage(from, to, body, mediaUrl = null) {
@@ -294,6 +335,7 @@ router.post('/', async (req, res) => {
       lead_stage: lead?.conversation_stage || null,
       lead_interest: lead?.interest || null,
       lead_budget: lead?.budget || null,
+      lead_budget_ranges: lead?.available_slots || null,
       lead_location: lead?.location || null,
       lead_size: lead?.size || null,
       lead_name: lead?.name || null,
@@ -623,6 +665,117 @@ nextStage = 'asked_size';
       }
       return;
     }
+
+    // -----------------------------------------------
+// ACTION: fetch_budget_ranges
+// -----------------------------------------------
+if (result.action === 'fetch_budget_ranges' && lead) {
+  await supabase
+    .from('leads')
+    .update({
+      size: result.updateFields?.Size,
+      conversation_stage: 'fetching_budget_ranges'
+    })
+    .eq('id', lead.id);
+
+  await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+  const interest = lead.interest || '';
+  const location = lead.location || '';
+  const size = result.updateFields?.Size || lead.size || '';
+  const normalizedInterest = normalize(interest);
+  const normalizedLocation = normalize(location);
+
+  // Build query to get price range for this specific criteria
+  let priceQuery = supabase
+    .from('properties')
+    .select('price')
+    .eq('tenant_id', tenant.id)
+    .ilike('type', normalizedInterest)
+    .ilike('location', normalizedLocation)
+    .eq('available', true)
+    .not('price', 'is', null);
+
+  // Filter by offplan preference
+  if (lead.is_offplan === true) {
+    priceQuery = priceQuery.eq('is_offplan', true);
+  } else if (lead.is_offplan === false) {
+    priceQuery = priceQuery.eq('is_offplan', false);
+  }
+
+  // Filter by bedrooms
+  const bedroomNumber = extractBedrooms(size);
+  if (normalizedInterest !== 'Land' && bedroomNumber !== null) {
+    priceQuery = priceQuery.eq('bedrooms', bedroomNumber);
+  }
+
+  const { data: priceData } = await priceQuery;
+
+  if (!priceData || priceData.length === 0) {
+    // No properties found for this criteria
+    await supabase
+      .from('leads')
+      .update({ conversation_stage: 'completed' })
+      .eq('id', lead.id);
+
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, we currently do not have any properties matching your criteria.\n\n` +
+      `Our agent will contact you shortly to assist you personally.\n\n` +
+      `Agent: ${agentName}\n` +
+      `Phone: ${agentPhone || 'N/A'}\n\n` +
+      `Reply HI to start a new search.`
+    );
+
+    if (agentPhone) {
+      await sendTemplateToAgent(
+        tenantWhatsApp,
+        agentPhone,
+        TEMPLATES.NO_PROPERTY_FOUND,
+        {
+          "1": lead.name || 'Unknown',
+          "2": cleanLeadPhone,
+          "3": kenyaTime
+        }
+      );
+    }
+    return;
+  }
+
+  // Get min and max prices
+  const prices = priceData.map(p => p.price).filter(p => p > 0).sort((a, b) => a - b);
+  const minPrice = prices[0];
+  const maxPrice = prices[prices.length - 1];
+
+  // Create smart budget ranges based on actual prices
+  const ranges = createBudgetRanges(minPrice, maxPrice);
+
+  // Save ranges to lead for later use
+  await supabase
+    .from('leads')
+    .update({
+      conversation_stage: 'asked_budget',
+      available_slots: JSON.stringify(ranges)
+    })
+    .eq('id', lead.id);
+
+  // Format ranges for display
+  const rangeOptions = Object.entries(ranges)
+    .map(([key, range]) => `${key} - KES ${Number(range.min).toLocaleString()} to KES ${Number(range.max).toLocaleString()}`)
+    .join('\n');
+
+  await sendMessage(
+    tenantWhatsApp,
+    from,
+    `What is your budget range?\n\n` +
+    `Available price ranges for your criteria:\n\n` +
+    `${rangeOptions}\n\n` +
+    `Reply with the number that suits you.`
+  );
+
+  return;
+}
 
     // -----------------------------------------------
     // ACTION: booking — check available slots
