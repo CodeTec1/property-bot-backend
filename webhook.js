@@ -362,8 +362,8 @@ const updatedHistory = [
   { role: 'assistant', content: aiResult.message }
 ];
 
-// Keep only last 20 messages to avoid token limits
-const trimmedHistory = updatedHistory.slice(-10);
+// Keep only last 6 messages to avoid token limits
+const trimmedHistory = updatedHistory.slice(-6);
 
 // -----------------------------------------------
 // Update lead with extracted information
