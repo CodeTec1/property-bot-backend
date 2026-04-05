@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
     "@supabase/supabase-js": "^2.100.1",
     "airtable": "^0.12.2",
     "body-parser": "^2.2.2",
