@@ -1,7 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const supabase = require('./supabase');
 
-// Initialize client inside function to ensure env vars are loaded
+// Initialize client
 function getAnthropicClient() {
   return new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY
@@ -9,14 +9,12 @@ function getAnthropicClient() {
 }
 
 // ============================================
-// Fetch available options from database
-// for this specific tenant
+// Fetch tenant options
 // ============================================
 async function fetchTenantOptions(tenantId, interest, location) {
   try {
     const options = {};
 
-    // Get available property types
     const { data: typeData } = await supabase
       .from('properties')
       .select('type')
@@ -27,7 +25,6 @@ async function fetchTenantOptions(tenantId, interest, location) {
       options.availableTypes = [...new Set(typeData.map(r => r.type).filter(Boolean))];
     }
 
-    // Get available locations for selected interest
     if (interest) {
       const { data: locData } = await supabase
         .from('properties')
@@ -37,11 +34,10 @@ async function fetchTenantOptions(tenantId, interest, location) {
         .ilike('type', interest);
 
       if (locData) {
-        options.availableLocations = [...new Set(locData.map(r => r.location).filter(Boolean))].sort();
+        options.availableLocations = [...new Set(locData.map(r => r.location).filter(Boolean))];
       }
     }
 
-    // Get available bedrooms for selected interest and location
     if (interest && location) {
       const { data: bedData } = await supabase
         .from('properties')
@@ -52,14 +48,13 @@ async function fetchTenantOptions(tenantId, interest, location) {
         .ilike('location', location);
 
       if (bedData) {
-        const beds = [...new Set(bedData.map(r => r.bedrooms).filter(b => b !== null))].sort((a, b) => a - b);
+        const beds = [...new Set(bedData.map(r => r.bedrooms).filter(b => b !== null))];
         options.availableBedrooms = beds.map(b => b === 0 ? 'Studio' : `${b} Bedroom${b > 1 ? 's' : ''}`);
 
         const plots = [...new Set(bedData.map(r => r.plot_size).filter(Boolean))];
         if (plots.length > 0) options.availablePlotSizes = plots;
       }
 
-      // Get price ranges
       const { data: priceData } = await supabase
         .from('properties')
         .select('price')
@@ -70,28 +65,13 @@ async function fetchTenantOptions(tenantId, interest, location) {
         .not('price', 'is', null);
 
       if (priceData && priceData.length > 0) {
-        const prices = priceData.map(r => r.price).filter(p => p > 0).sort((a, b) => a - b);
+        const prices = priceData.map(r => r.price).filter(p => p > 0);
+        prices.sort((a, b) => a - b);
+
         options.priceRange = {
           min: prices[0],
-          max: prices[prices.length - 1],
-          minFormatted: `KES ${Number(prices[0]).toLocaleString()}`,
-          maxFormatted: `KES ${Number(prices[prices.length - 1]).toLocaleString()}`
+          max: prices[prices.length - 1]
         };
-      }
-
-      // Get completion dates for offplan
-      const { data: dateData } = await supabase
-        .from('properties')
-        .select('completion_date')
-        .eq('tenant_id', tenantId)
-        .eq('available', true)
-        .eq('is_offplan', true)
-        .ilike('type', interest)
-        .ilike('location', location)
-        .not('completion_date', 'is', null);
-
-      if (dateData && dateData.length > 0) {
-        options.completionDates = [...new Set(dateData.map(r => r.completion_date).filter(Boolean))];
       }
     }
 
@@ -103,7 +83,7 @@ async function fetchTenantOptions(tenantId, interest, location) {
 }
 
 // ============================================
-// Main AI conversation function
+// MAIN FUNCTION
 // ============================================
 async function processAIConversation(params) {
   const {
@@ -116,147 +96,128 @@ async function processAIConversation(params) {
   } = params;
 
   try {
-    // Fetch available options dynamically from database
+    const anthropic = getAnthropicClient();
+
+    const messageText = userMessage.trim().toLowerCase();
+
+    // ============================================
+    // 🚨 HANDLE GREETINGS WITHOUT AI (SAVE MONEY)
+    // ============================================
+    if (['hi', 'hello', 'hey'].includes(messageText)) {
+      return {
+        message: `Hello 👋 Welcome to ${tenant.company_name}!\n\nWhat are you looking for today?`,
+        action: "continue",
+        extracted: {},
+        confidence: "high"
+      };
+    }
+
+    // ============================================
+    // 🔥 LIMIT HISTORY (REDUCE COST)
+    // ============================================
+    const trimmedHistory = (conversationHistory || []).slice(-5);
+
+    // Fetch DB options
     const options = await fetchTenantOptions(
       tenant.id,
       lead?.interest || null,
       lead?.location || null
     );
 
-    // Build what we already know about the lead
+    // Known info
     const knownInfo = [];
     if (lead?.name) knownInfo.push(`Name: ${lead.name}`);
-    if (lead?.interest) knownInfo.push(`Property Type: ${lead.interest}`);
+    if (lead?.interest) knownInfo.push(`Type: ${lead.interest}`);
     if (lead?.location) knownInfo.push(`Location: ${lead.location}`);
-    if (lead?.size) knownInfo.push(`Size: ${lead.size}`);
-    if (lead?.budget) knownInfo.push(`Budget: KES ${Number(lead.budget).toLocaleString()}`);
-    if (lead?.is_offplan !== null && lead?.is_offplan !== undefined) {
-      knownInfo.push(`Property Status: ${lead.is_offplan ? 'Off-Plan' : 'Ready'}`);
-    }
-    if (lead?.completion_range) knownInfo.push(`Completion: ${lead.completion_range}`);
+    if (lead?.budget) knownInfo.push(`Budget: ${lead.budget}`);
 
-    // Build the system prompt
-    const systemPrompt = `You are a smart, friendly and professional real estate assistant for ${tenant.company_name}.
-Your name is ${tenant.bot_name || 'PropertyBot'}.
+    // ============================================
+    // 🧠 SYSTEM PROMPT (STRICT + CONTROLLED)
+    // ============================================
+    const systemPrompt = `
+You are a real estate assistant for ${tenant.company_name}.
 
-Your job is to help users find their perfect property through natural conversation.
-You must feel like a knowledgeable human agent, not a bot.
+STRICT RULES:
+- NEVER invent property details.
+- NEVER hallucinate locations, prices, or features.
+- ONLY use provided data.
+- If unsure, ask a question.
+- Keep replies under 60 words.
+- Output ONLY valid JSON. No markdown. No backticks. No explanation.
 
-AVAILABLE PROPERTY DATA IN OUR DATABASE:
-${options.availableTypes?.length > 0 ? `Property Types: ${options.availableTypes.join(', ')}` : ''}
-${options.availableLocations?.length > 0 ? `Available Locations: ${options.availableLocations.join(', ')}` : ''}
-${options.availableBedrooms?.length > 0 ? `Available Sizes: ${options.availableBedrooms.join(', ')}` : ''}
-${options.availablePlotSizes?.length > 0 ? `Available Plot Sizes: ${options.availablePlotSizes.join(', ')}` : ''}
-${options.priceRange ? `Price Range: ${options.priceRange.minFormatted} to ${options.priceRange.maxFormatted}` : ''}
-${options.completionDates?.length > 0 ? `Off-Plan Completion Dates: ${options.completionDates.join(', ')}` : ''}
+AVAILABLE DATA:
+${options.availableTypes?.join(', ') || 'N/A'}
+${options.availableLocations?.join(', ') || ''}
+${options.availableBedrooms?.join(', ') || ''}
 
-WHAT WE ALREADY KNOW ABOUT THIS USER:
-${knownInfo.length > 0 ? knownInfo.join('\n') : 'Nothing yet - this is a new conversation'}
+KNOWN USER INFO:
+${knownInfo.join('\n') || 'None'}
 
-AGENT CONTACT (use when no properties found or user needs human help):
-Agent: ${agentName || 'Our Agent'}
-Phone: ${agentPhone || 'N/A'}
-
-YOUR CONVERSATION RULES:
-1. Be warm, natural and conversational. Never sound like a menu system.
-2. Extract information naturally from what the user says. Do not ask for info they already gave.
-3. Only suggest options that EXIST in the database above. Never make up locations, prices or availability.
-4. Ask for ONE missing piece of information at a time. Never bombard with multiple questions.
-5. If user mentions something not in database suggest the closest available alternative naturally.
-6. Once you have enough info to search set action to "search_properties".
-7. When user selects a property to view set action to "booking".
-8. When user wants to cancel a booking set action to "cancel_booking".
-9. Keep messages concise and WhatsApp-friendly. Use line breaks for readability.
-10. Use occasional emojis but do not overdo it. Keep it professional.
-11. Keep responses short, clear, and under 80 words.
-
-INFORMATION YOU NEED TO COLLECT (in natural conversation order):
-- Name (ask early and use it throughout)
-- Property type (Buy/Rent/Land)
-- Ready or Off-Plan preference
-- Completion date preference (only if Off-Plan)
-- Location (from available locations only)
-- Size/Bedrooms (from available options only)
-- Budget (suggest the actual price range from database)
-
-WHEN TO SEARCH:
-Set action to "search_properties" when you have:
-- Property type
-- Location
-- Size or plot size
-- Budget or budget range confirmed
-
-RESPONSE FORMAT:
-You must ALWAYS respond with valid JSON in this exact format:
+OUTPUT FORMAT:
 {
-  "message": "your natural conversational reply here",
-  "action": "continue" | "search_properties" | "booking" | "cancel_booking" | "human_handoff",
+  "message": "string",
+  "action": "continue",
   "extracted": {
-    "name": null or "string",
-    "interest": null or "Buy" or "Rent" or "Land",
-    "location": null or "string",
-    "size": null or "string like 2 bedroom or Studio",
-    "bedrooms": null or number,
-    "budget": null or number,
-    "is_offplan": null or true or false,
-    "completion_range": null or "2026" or "2027" or "2028" or "2029+" or "any",
-    "property_number": null or number,
-    "slot_number": null or number
+    "name": null,
+    "interest": null,
+    "location": null,
+    "size": null,
+    "bedrooms": null,
+    "budget": null,
+    "is_offplan": null,
+    "completion_range": null,
+    "property_number": null,
+    "slot_number": null
   },
-  "confidence": "high" or "medium" or "low"
+  "confidence": "high"
 }
+`;
 
-IMPORTANT: Return ONLY the JSON. No text before or after. No markdown code blocks.`;
-
-    // Build conversation messages for Claude
-    const messages = [];
-
-    // Add conversation history
-    if (conversationHistory && conversationHistory.length > 0) {
-      for (const msg of conversationHistory) {
-        messages.push({
-          role: msg.role,
-          content: msg.content
-        });
+    // ============================================
+    // BUILD MESSAGES (TRIM + SAFE)
+    // ============================================
+    const messages = [
+      ...trimmedHistory.map(m => ({
+        role: m.role,
+        content: m.content.slice(0, 500)
+      })),
+      {
+        role: 'user',
+        content: userMessage.slice(0, 500)
       }
-    }
+    ];
 
-    // Add current user message
-    messages.push({
-      role: 'user',
-      content: userMessage
+    // ============================================
+    // CALL CLAUDE
+    // ============================================
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      temperature: 0.3,
+      system: systemPrompt,
+      messages
     });
 
-    console.log('Calling Claude AI...');
-    console.log('Messages count:', messages.length);
+    const raw = response.content?.[0]?.text || '';
+    console.log('Claude response:', raw);
 
-    console.log('API Key present:', !!process.env.ANTHROPIC_API_KEY);
-    console.log('API Key length:', process.env.ANTHROPIC_API_KEY?.length);
-
-    const anthropic = getAnthropicClient();
-const response = await anthropic.messages.create({
-  model: 'claude-haiku-4-5-20251001',
-  max_tokens: 200,
-  system: systemPrompt,
-  messages: messages
-});
-    const rawResponse = response.content[0].text;
-    console.log('Claude response:', rawResponse);
-
-    // Parse JSON response
+    // ============================================
+    // CLEAN + PARSE JSON
+    // ============================================
     let parsed;
+
     try {
-      // Clean response in case there are any markdown artifacts
-      const cleaned = rawResponse
+      const cleaned = raw
         .replace(/```json/g, '')
         .replace(/```/g, '')
         .trim();
+
       parsed = JSON.parse(cleaned);
-    } catch (parseError) {
-      console.error('Failed to parse Claude response:', parseError);
-      // Return safe fallback
+    } catch (err) {
+      console.error('JSON parse error:', err);
+
       return {
-        message: "I am sorry, something went wrong. Please try again or send HI to restart.",
+        message: "I didn’t quite get that. Could you rephrase?",
         action: "continue",
         extracted: {},
         confidence: "low"
@@ -266,9 +227,10 @@ const response = await anthropic.messages.create({
     return parsed;
 
   } catch (error) {
-    console.error('Error in AI conversation:', error);
+    console.error('AI error:', error);
+
     return {
-      message: `I am sorry, something went wrong on my end.\n\nPlease contact our agent directly:\nAgent: ${agentName || 'Our Agent'}\nPhone: ${agentPhone || 'N/A'}\n\nOr reply HI to try again.`,
+      message: `Something went wrong.\nPlease contact:\n${agentName || 'Agent'} - ${agentPhone || 'N/A'}`,
       action: "human_handoff",
       extracted: {},
       confidence: "low"
