@@ -115,7 +115,7 @@ async function processAIConversation(params) {
     // ============================================
     // 🔥 LIMIT HISTORY (REDUCE COST)
     // ============================================
-    const trimmedHistory = (conversationHistory || []).slice(-5);
+    const trimmedHistory = (conversationHistory || []).slice(-10);
 
     // Fetch DB options
     const options = await fetchTenantOptions(
@@ -125,11 +125,13 @@ async function processAIConversation(params) {
     );
 
     // Known info
-    const knownInfo = [];
-    if (lead?.name) knownInfo.push(`Name: ${lead.name}`);
-    if (lead?.interest) knownInfo.push(`Type: ${lead.interest}`);
-    if (lead?.location) knownInfo.push(`Location: ${lead.location}`);
-    if (lead?.budget) knownInfo.push(`Budget: ${lead.budget}`);
+  const knownInfo = [];
+if (lead?.name) knownInfo.push(`Name: ${lead.name}`);
+if (lead?.interest) knownInfo.push(`Type: ${lead.interest}`);
+if (lead?.location) knownInfo.push(`Location: ${lead.location}`);
+if (lead?.budget) knownInfo.push(`Budget: ${lead.budget}`);
+if (lead?.bedrooms) knownInfo.push(`Bedrooms: ${lead.bedrooms}`); 
+if (lead?.size) knownInfo.push(`Size: ${lead.size}`);            
 
     // ============================================
     // 🧠 SYSTEM PROMPT (STRICT + CONTROLLED)

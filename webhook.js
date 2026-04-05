@@ -362,7 +362,7 @@ const updatedHistory = [
 ];
 
 // Keep only last 20 messages to avoid token limits
-const trimmedHistory = updatedHistory.slice(-20);
+const trimmedHistory = updatedHistory.slice(-10);
 
 // -----------------------------------------------
 // Update lead with extracted information
