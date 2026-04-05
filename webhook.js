@@ -346,7 +346,8 @@ const aiResult = await processAIConversation({
   tenant: tenant,
   conversationHistory: conversationHistory,
   agentName: agentName,
-  agentPhone: agentPhone
+  agentPhone: agentPhone,
+  isNewLead: !lead
 });
 
 console.log('AI action:', aiResult.action);
@@ -383,6 +384,24 @@ if (aiResult.extracted) {
   if (e.budget) leadUpdateData.budget = e.budget.toString();
   if (e.is_offplan !== null && e.is_offplan !== undefined) leadUpdateData.is_offplan = e.is_offplan;
   if (e.completion_range) leadUpdateData.completion_range = e.completion_range;
+}
+
+// Handle restart - clear lead data for fresh search
+if (aiResult.extracted?.restart) {
+  await supabase
+    .from('leads')
+    .update({
+      interest: null,
+      location: null,
+      size: null,
+      budget: null,
+      is_offplan: null,
+      completion_range: null,
+      conversation_stage: 'continue',
+      conversation_history: [],
+      search_results: null
+    })
+    .eq('id', lead.id);
 }
 
 // -----------------------------------------------
