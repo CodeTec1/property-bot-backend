@@ -233,15 +233,13 @@ IMPORTANT: Return ONLY the JSON. No text before or after. No markdown code block
     console.log('API Key present:', !!process.env.ANTHROPIC_API_KEY);
     console.log('API Key length:', process.env.ANTHROPIC_API_KEY?.length);
 
-    // Call Claude API
     const anthropic = getAnthropicClient();
-    const response = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 200,
-      system: systemPrompt,
-      messages: messages
-    });
-
+const response = await anthropic.messages.create({
+  model: 'claude-haiku-4-5-20251001',
+  max_tokens: 200,
+  system: systemPrompt,
+  messages: messages
+});
     const rawResponse = response.content[0].text;
     console.log('Claude response:', rawResponse);
 
