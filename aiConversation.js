@@ -1,10 +1,12 @@
-// aiConversation.js - AI-powered conversation engine
 const Anthropic = require('@anthropic-ai/sdk');
 const supabase = require('./supabase');
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY
-});
+// Initialize client inside function to ensure env vars are loaded
+function getAnthropicClient() {
+  return new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY
+  });
+}
 
 // ============================================
 // Fetch available options from database
@@ -227,7 +229,11 @@ IMPORTANT: Return ONLY the JSON. No text before or after. No markdown code block
     console.log('Calling Claude AI...');
     console.log('Messages count:', messages.length);
 
+    console.log('API Key present:', !!process.env.ANTHROPIC_API_KEY);
+    console.log('API Key length:', process.env.ANTHROPIC_API_KEY?.length);
+
     // Call Claude API
+    const anthropic = getAnthropicClient();
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-5',
       max_tokens: 1024,
