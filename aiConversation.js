@@ -141,6 +141,7 @@ Your name is ${tenant.bot_name || 'PropertyBot'}.
 
 Your job is to help users find their perfect property through natural conversation.
 You must feel like a knowledgeable human agent, not a bot.
+Keep responses short, clear, and under 80 words. Be conversational and direct.
 
 AVAILABLE PROPERTY DATA IN OUR DATABASE:
 ${options.availableTypes?.length > 0 ? `Property Types: ${options.availableTypes.join(', ')}` : ''}
@@ -235,8 +236,8 @@ IMPORTANT: Return ONLY the JSON. No text before or after. No markdown code block
     // Call Claude API
     const anthropic = getAnthropicClient();
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 1024,
+      model: 'claude-3-haiku-20240307',
+      max_tokens: 200,
       system: systemPrompt,
       messages: messages
     });
