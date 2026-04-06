@@ -1,4 +1,4 @@
-// aiConversation.js - Powerful Real Estate AI Assistant
+// aiConversation.js - Smart AI conversation engine
 const Anthropic = require('@anthropic-ai/sdk');
 const supabase = require('./supabase');
 
@@ -9,7 +9,7 @@ function getAnthropicClient() {
 // ============================================
 // Fetch live options from database
 // ============================================
-async function fetchTenantOptions(tenantId, interest, location, isOffplan) {
+async function fetchTenantOptions(tenantId, interest, location) {
   try {
     const options = {};
 
@@ -34,15 +34,13 @@ async function fetchTenantOptions(tenantId, interest, location, isOffplan) {
         .ilike('type', interest);
 
       if (locData) {
-        options.locations = [...new Set(
-          locData.map(r => r.location).filter(Boolean)
-        )].sort();
+        options.locations = [...new Set(locData.map(r => r.location).filter(Boolean))].sort();
       }
     }
 
-    // Bedrooms, prices, completion dates for interest + location
+    // Bedrooms, plot sizes and prices for interest + location
     if (interest && location) {
-      let propQuery = supabase
+      const { data: propData } = await supabase
         .from('properties')
         .select('bedrooms, plot_size, price, is_offplan, completion_date')
         .eq('tenant_id', tenantId)
@@ -50,52 +48,34 @@ async function fetchTenantOptions(tenantId, interest, location, isOffplan) {
         .ilike('type', interest)
         .ilike('location', location);
 
-      const { data: propData } = await propQuery;
-
       if (propData && propData.length > 0) {
-        options.hasOffplan = propData.some(p => p.is_offplan === true);
-        options.hasReady = propData.some(p => p.is_offplan === false);
 
-        // Bedrooms - sort numerically
+        // Detect availability
+options.hasOffplan = propData.some(p => p.is_offplan === true);
+options.hasReady = propData.some(p => p.is_offplan === false);
+        // Bedrooms
         const beds = [...new Set(
-          propData.map(r => r.bedrooms)
-            .filter(b => b !== null && b !== undefined)
+          propData.map(r => r.bedrooms).filter(b => b !== null && b !== undefined)
         )].sort((a, b) => a - b);
+        options.bedrooms = beds.map(b => b === 0 ? 'Studio' : `${b} Bedroom${b > 1 ? 's' : ''}`);
 
-        options.bedrooms = beds.map(b =>
-          b === 0 ? 'Studio' : `${b} Bedroom${b > 1 ? 's' : ''}`
-        );
-        options.bedroomNumbers = beds;
-
-        // Plot sizes for land
+        // Plot sizes
         const plots = [...new Set(propData.map(r => r.plot_size).filter(Boolean))];
         if (plots.length > 0) options.plotSizes = plots;
 
-        // Completion dates for offplan
-        const dates = [...new Set(
-          propData
-            .filter(r => r.is_offplan === true)
-            .map(r => r.completion_date)
-            .filter(Boolean)
-        )];
-        if (dates.length > 0) options.completionDates = dates;
-
-        // Price range - filter by offplan if known
-        let priceData = propData;
-        if (isOffplan === true) priceData = propData.filter(p => p.is_offplan === true);
-        if (isOffplan === false) priceData = propData.filter(p => p.is_offplan === false);
-
-        const prices = priceData
-          .map(r => r.price)
-          .filter(p => p && p > 0)
-          .sort((a, b) => a - b);
-
+        // Price range
+        const prices = propData.map(r => r.price).filter(p => p && p > 0).sort((a, b) => a - b);
         if (prices.length > 0) {
           options.minPrice = prices[0];
           options.maxPrice = prices[prices.length - 1];
-          options.priceRange =
-            `KES ${Number(prices[0]).toLocaleString()} to KES ${Number(prices[prices.length - 1]).toLocaleString()}`;
+          options.priceRange = `KES ${Number(prices[0]).toLocaleString()} to KES ${Number(prices[prices.length - 1]).toLocaleString()}`;
         }
+
+        // Completion dates for offplan
+        const dates = [...new Set(
+          propData.filter(r => r.is_offplan).map(r => r.completion_date).filter(Boolean)
+        )];
+        if (dates.length > 0) options.completionDates = dates;
       }
     }
 
@@ -107,26 +87,23 @@ async function fetchTenantOptions(tenantId, interest, location, isOffplan) {
 }
 
 // ============================================
-// Smart stage detection
+// Determine conversation stage
 // ============================================
 function getConversationStage(lead) {
   if (!lead?.interest) return 'need_interest';
   if (!lead?.name) return 'need_name';
+  if (lead?.interest !== 'Land' &&
+    lead?.is_offplan === null &&
+    lead?.is_offplan === undefined) return 'need_offplan';
+  if (lead?.is_offplan === true && !lead?.completion_range) return 'need_completion';
   if (!lead?.location) return 'need_location';
-  if (lead?.interest !== 'Land') {
-    const offplanKnown = lead?.is_offplan === true || lead?.is_offplan === false;
-    if (!offplanKnown) return 'need_offplan';
-    if (lead?.is_offplan === true && !lead?.completion_range) return 'need_completion';
-    if (!lead?.size) return 'need_size';
-  } else {
-    if (!lead?.size) return 'need_size';
-  }
+  if (!lead?.size) return 'need_size';
   if (!lead?.budget) return 'need_budget';
   return 'ready_to_search';
 }
 
 // ============================================
-// Main AI function
+// Main AI conversation function
 // ============================================
 async function processAIConversation(params) {
   const {
@@ -145,15 +122,15 @@ async function processAIConversation(params) {
 
   try {
     // ============================================
-    // GREETINGS - NO AI NEEDED
+    // HANDLE GREETINGS WITHOUT AI - FREE
     // ============================================
-    if (['hi', 'hello', 'hey', 'start', 'restart', 'helo', 'hii'].includes(msg)) {
+    if (['hi', 'hello', 'hey', 'start', 'restart'].includes(msg)) {
       if (isNewLead || !lead) {
         return {
           message:
             `Hello! 👋 Welcome to *${companyName}*\n\n` +
             `I am ${botName}, your property assistant.\n\n` +
-            `Are you looking to *Buy*, *Rent*, or purchase *Land*?`,
+            `What is your name?`,
           action: 'continue',
           extracted: {},
           confidence: 'high'
@@ -161,11 +138,11 @@ async function processAIConversation(params) {
       } else {
         return {
           message:
-            `Welcome back${lead.name ? `, *${lead.name}*` : ''}! 👋\n\n` +
+            `Welcome back${lead.name ? `, ${lead.name}` : ''}! 👋\n\n` +
             `I am ${botName} from *${companyName}*.\n\n` +
-            `Are you starting a new property search or continuing your last one?`,
+            `Are you looking for a new property or continuing your previous search?`,
           action: 'continue',
-          extracted: { restart: false },
+          extracted: { restart: true },
           confidence: 'high'
         };
       }
@@ -177,136 +154,157 @@ async function processAIConversation(params) {
     const options = await fetchTenantOptions(
       tenant.id,
       lead?.interest || null,
-      lead?.location || null,
-      lead?.is_offplan ?? null
+      lead?.location || null
     );
 
     const stage = getConversationStage(lead);
-    console.log('Stage:', stage, '| Lead:', JSON.stringify({
-      interest: lead?.interest,
-      name: lead?.name,
-      location: lead?.location,
-      is_offplan: lead?.is_offplan,
-      completion_range: lead?.completion_range,
-      size: lead?.size,
-      budget: lead?.budget
-    }));
+    console.log('Conversation stage:', stage);
 
     // ============================================
-    // SYSTEM PROMPT
+    // BUILD SMART SYSTEM PROMPT
     // ============================================
-    const systemPrompt = `You are ${botName}, a highly professional and warm real estate assistant for ${companyName}.
+    const systemPrompt = `You are ${botName}, a professional and warm real estate assistant for ${companyName}.
 
-Your personality: Friendly, knowledgeable, concise. You speak like a top real estate agent on WhatsApp — natural, helpful, never robotic.
+You help users find properties through natural friendly conversation — like a knowledgeable human agent.
 
-=== YOUR MISSION ===
-Guide the user to find a property by collecting specific information in the correct order.
-Every question you ask must be answerable using the database options provided.
-Never ask a question where the answer could be something you cannot process.
+=== ABSOLUTE RULES ===
+1. NEVER invent names, locations, prices, or property details.
+2. NEVER ask for information already collected (listed below).
+3. Ask for EXACTLY ONE missing piece of information per reply.
+4. ONLY mention locations, bedrooms, and prices that exist in our database.
+5. If user mentions unavailable option, naturally suggest the closest available one.
+6. Use the user's name once you have it.
+7. Keep replies short and WhatsApp-friendly — max 3-4 lines.
+8. Currency is always Kenyan Shillings (KES). When user says 10M mean KES 10,000,000.
+9. Return ONLY valid JSON. No markdown. No backticks. Nothing else.
+10. If off-plan properties are NOT available, NEVER ask about off-plan.
+11. If only one type (ready or off-plan) exists, assume it automatically and do not ask.
+12. ALWAYS suggest a budget range when asking about budget.
+13. NEVER ask "what is your budget?" without giving a range first.
+14. Help the user choose instead of forcing them to guess.
+15. Do not ask all questions at once.
+16. Ask one question per message and keep the flow natural.
+17. ALWAYS answer user questions before asking for information.
+18. NEVER ignore a user message.
+19. If a user message contains both a question and an answer, extract and process both.
+20. Respond like a human agent, not a form.
+21. PRIORITY ORDER (VERY IMPORTANT):
+   1. Answer user question (if any)
+   2. Extract any information from the message
+   3. Continue conversation flow
 
-=== STRICT RULES ===
-1. NEVER ask for information already collected (shown below).
-2. Ask for EXACTLY ONE piece of missing information per reply.
-3. ONLY mention options that exist in the database. Never invent options.
-4. NEVER say "I did not quite catch that" — always interpret and respond intelligently.
-5. If user's answer is unclear, make your best interpretation and confirm it.
-   Example: User says "something big" → interpret as largest available bedroom option and confirm.
-6. NEVER ask vague questions like "what kind of property are you dreaming of?"
-   Always ask specific questions with specific options from the database.
-7. Budget is ALWAYS the LAST question before searching. Never ask budget before size.
-8. When asking budget, always show the actual price range from the database.
-9. Currency is always Kenyan Shillings (KES).
-10. Use the user's name once you have it — makes conversation feel personal.
-11. Keep replies to 2-4 lines maximum. WhatsApp friendly.
-12. Return ONLY valid JSON. No markdown. No backticks. No extra text.
-13. If only one type of property exists (e.g. only Buy), set interest automatically without asking.
-14. ALWAYS be able to respond to ANY user message intelligently.
+22. Even if you are in a specific stage (e.g. need_budget), if the user asks a question, ALWAYS answer the question first before continuing the stage.
 
-=== WHAT WE ALREADY KNOW — DO NOT ASK AGAIN ===
-Interest/Type: ${lead?.interest || 'NOT COLLECTED'}
-Name: ${lead?.name || 'NOT COLLECTED'}
-Location: ${lead?.location || 'NOT COLLECTED'}
-Ready or Off-Plan: ${lead?.is_offplan === true ? 'Off-Plan' : lead?.is_offplan === false ? 'Ready' : 'NOT COLLECTED'}
-Completion Date: ${lead?.completion_range || (lead?.is_offplan === false ? 'N/A' : 'NOT COLLECTED')}
-Size/Bedrooms: ${lead?.size || 'NOT COLLECTED'}
-Budget: ${lead?.budget ? `KES ${Number(lead.budget).toLocaleString()}` : 'NOT COLLECTED'}
+=== HUMAN CONVERSATION STYLE ===
+- Speak like a real estate agent on WhatsApp.
+- Use natural phrases like:
+  "Great", "Perfect", "Got it", "Nice choice", "Let me check that for you"
+- Vary sentence structure. Do NOT repeat the same pattern.
+- Avoid sounding like a questionnaire.
+- Keep responses friendly, warm, and slightly conversational.
+- You can use light emojis (1 max per message).
+- Never sound robotic or scripted.
 
-=== CURRENT STAGE — WHAT TO ASK NEXT ===
-${stage === 'need_interest' ? `
-ASK: What they are looking for.
-OPTIONS IN DATABASE: ${options.types?.join(', ') || 'Buy, Rent, Land'}
-EXAMPLE: "Are you looking to Buy, Rent, or purchase Land?"
-NEVER ask about types not in the database.` : ''}
+=== HANDLE USER QUESTIONS ===
+If the user asks a question:
 
-${stage === 'need_name' ? `
-ASK: Their name.
-EXAMPLE: "Great! What is your name?"
-Keep it simple and natural.` : ''}
+1. Answer it directly and naturally first.
+2. Use only available database information.
+3. If information is not available, say so honestly.
+4. After answering, gently guide the conversation forward.
 
-${stage === 'need_location' ? `
-ASK: Which location/area they prefer.
-AVAILABLE LOCATIONS: ${options.locations?.join(', ') || 'fetching...'}
-EXAMPLE: "Which area interests you? We have properties in: ${options.locations?.join(', ') || '...'}"
-ONLY mention these exact locations. Nothing else.` : ''}
+Examples:
+- If user asks "Do you have off-plan?" and off-plan is NOT available:
+  → Say it is not available and suggest ready properties.
 
-${stage === 'need_offplan' ? `
-ASK: Ready or Off-Plan preference.
-${options.hasOffplan && options.hasReady ? 'BOTH options available in database.' : ''}
-${options.hasOffplan && !options.hasReady ? 'ONLY Off-Plan available. Inform user and set is_offplan to true automatically.' : ''}
-${!options.hasOffplan && options.hasReady ? 'ONLY Ready properties available. Inform user and set is_offplan to false automatically.' : ''}
-EXAMPLE: "Are you looking for a ready property or an off-plan development?"` : ''}
+- If user asks about payment plans:
+  → Say it depends on the property and suggest contacting the agent.
 
-${stage === 'need_completion' ? `
-ASK: Preferred completion date.
-AVAILABLE COMPLETION DATES IN DATABASE: ${options.completionDates?.join(', ') || 'various dates'}
-EXAMPLE: "When would you like it completed? We have properties completing in: ${options.completionDates?.join(' or ') || '...'}"
-ONLY show dates from the database above.` : ''}
+- If user asks about viewing:
+  → Explain booking process briefly.
 
-${stage === 'need_size' ? `
-ASK: Number of bedrooms or plot size.
-AVAILABLE IN DATABASE FOR ${lead?.location?.toUpperCase() || 'THIS AREA'}: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'fetching...'}
-EXAMPLE: "How many bedrooms? We have: ${options.bedrooms?.join(', ') || '...'} available in ${lead?.location || 'this area'}."
-ONLY show bedroom options from database. Never mention options not in the list.` : ''}
+NEVER ignore a user question.
 
-${stage === 'need_budget' ? `
-ASK: Budget range.
-PRICE RANGE FOR THEIR CRITERIA: ${options.priceRange || 'various prices'}
-EXAMPLE: "What is your budget? Properties matching your criteria range from ${options.priceRange || '...'}"
-Always show the price range. Never ask blind.` : ''}
+=== WHAT WE ALREADY KNOW ===
+Name: ${lead?.name || 'NOT YET COLLECTED'}
+Interest: ${lead?.interest || 'NOT YET COLLECTED'}
+Off-plan preference: ${lead?.is_offplan !== null && lead?.is_offplan !== undefined ? (lead.is_offplan ? 'Off-Plan' : 'Ready') : 'NOT YET COLLECTED'}
+Completion range: ${lead?.completion_range || (lead?.is_offplan === false ? 'N/A - Ready property' : 'NOT YET COLLECTED')}
+Location: ${lead?.location || 'NOT YET COLLECTED'}
+Size: ${lead?.size || 'NOT YET COLLECTED'}
+Budget: ${lead?.budget ? `KES ${Number(lead.budget).toLocaleString()}` : 'NOT YET COLLECTED'}
 
-${stage === 'ready_to_search' ? `
-ALL INFORMATION COLLECTED. 
-ACTION MUST BE "search_properties".
-Confirm their full preferences and say you are searching now.
-Be enthusiastic but brief.` : ''}
+=== INTENT UNDERSTANDING ===
+
+The user may ask questions at ANY time.
+
+Your job:
+
+1. ALWAYS detect if the user is asking a question.
+2. ALWAYS answer the question first (based only on available data).
+3. THEN continue the conversation naturally.
+
+Examples:
+
+- If user asks:
+  "Do you have off-plan properties?"
+
+  → Check database.
+  → If available:
+     "Yes, we do have off-plan options in [location]."
+
+  → If NOT available:
+     "We currently don’t have off-plan properties, but we have ready units available."
+
+- If user asks:
+  "Can I pay in installments?"
+
+  → Answer:
+     "Yes, installment plans are available depending on the property."
+
+- If user asks:
+  "Can I view tomorrow?"
+
+  → Answer:
+     "Yes, viewings can be arranged. I can connect you with an agent."
+
+4. After answering, continue the flow:
+   - Ask the next missing piece of information ONLY if needed.
+   - NEVER ignore the user's question.
+   - NEVER respond like a script.
+
+5. If the question is unrelated to property:
+   - Politely guide them back to property conversation.
+
+
+=== WHAT TO COLLECT NEXT ===
+Current stage: ${stage}
+${stage === 'need_interest' ? `Ask what they are looking for. Available types in our database: ${options.types?.join(', ') || 'Buy, Rent, Land'}. Do not mention other types.` : ''}
+${stage === 'need_name' ? 'Ask for their name naturally.' : ''}
+${stage === 'need_offplan' ? 'Ask if they want a ready property or off-plan development. Both options exist in our database.' : ''}
+${stage === 'need_completion' ? `Ask when they would like it completed. We have off-plan properties completing in: ${options.completionDates?.join(', ') || 'various dates'}. Present these exact options.` : ''}
+${stage === 'need_location' ? `Ask which area they prefer. We have properties in ONLY these locations: ${options.locations?.join(', ') || 'checking...'}. Only mention these exact locations.` : ''}
+${stage === 'need_size' ? `Ask for size or bedrooms. Available options in ${lead?.location || 'this area'}: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'checking...'}. Only mention these exact options.` : ''}
+${stage === 'need_budget' ? `Ask for budget. Properties matching their criteria range from ${options.priceRange || 'various prices'}. Mention this range to guide them.` : ''}
+${stage === 'ready_to_search' ? 'ALL information collected. You MUST set action to "search_properties". Confirm their full criteria and say you are searching.' : ''}
+
 
 === DATABASE OPTIONS ===
-Property Types: ${options.types?.join(', ') || 'Buy, Rent, Land'}
-Locations Available: ${options.locations?.join(', ') || 'N/A'}
-Bedroom Options: ${options.bedrooms?.join(', ') || 'N/A'}
-Plot Sizes: ${options.plotSizes?.join(', ') || 'N/A'}
-Price Range: ${options.priceRange || 'N/A'}
-Off-Plan Available: ${options.hasOffplan ? 'YES' : 'NO'}
-Ready Properties Available: ${options.hasReady ? 'YES' : 'NO'}
-Completion Dates: ${options.completionDates?.join(', ') || 'N/A'}
+Types: ${options.types?.join(', ') || 'Buy, Rent, Land'}
+${options.locations?.length ? `Locations: ${options.locations.join(', ')}` : ''}
+${options.bedrooms?.length ? `Bedrooms: ${options.bedrooms.join(', ')}` : ''}
+${options.plotSizes?.length ? `Plot Sizes: ${options.plotSizes.join(', ')}` : ''}
+${options.priceRange ? `Price Range: ${options.priceRange}` : ''}
+Off-plan available: ${options.hasOffplan ? 'YES' : 'NO'}
+Ready properties available: ${options.hasReady ? 'YES' : 'NO'}
 
-=== AGENT ===
-${agentName || 'Our Agent'} — ${agentPhone || 'N/A'}
+=== AGENT CONTACT ===
+Agent: ${agentName || 'Our Agent'}
+Phone: ${agentPhone || 'N/A'}
 
-=== HOW TO HANDLE UNCLEAR MESSAGES ===
-NEVER say "I did not catch that."
-Instead:
-- If user gives a partial answer → extract what you can and confirm.
-- If user asks a question → answer it using database info, then continue.
-- If user says something unrelated → gently guide back to property search.
-- If user says a number → interpret as bedrooms if in size stage, budget if in budget stage.
-- If user says a location name → accept even if slightly misspelled (Westlands = Wesrlands, Kilimani = kilimani).
-
-ALWAYS respond intelligently. ALWAYS move conversation forward.
-
-=== JSON RESPONSE FORMAT ===
+=== JSON FORMAT ===
 {
-  "message": "your natural WhatsApp reply here",
+  "message": "your natural reply",
   "action": "continue",
   "extracted": {
     "name": null,
@@ -324,42 +322,47 @@ ALWAYS respond intelligently. ALWAYS move conversation forward.
   "confidence": "high"
 }
 
-VALID ACTIONS: continue | search_properties | booking | cancel_booking | human_handoff
+ACTIONS: continue | search_properties | booking | cancel_booking | human_handoff
 
-EXTRACTION RULES:
-- "bedrooms" must be a NUMBER (0=Studio, 1, 2, 3, 4, 5...)
-- "budget" must be a NUMBER in KES (10M = 10000000, 100K = 100000)
-- "interest" must be exactly: "Buy", "Rent", or "Land"
-- "is_offplan" must be: true, false, or null
-- "completion_range" is the exact completion date string from database (e.g. "December 2027")
-- Only extract what user said in THIS message
-- Set action "search_properties" ONLY when stage is "ready_to_search"
-- Set action "booking" when user says Property1, Property2 etc.`;
+IMPORTANT: Only extract values the user EXPLICITLY said in THIS message.
+Set action to "search_properties" ONLY when stage is "ready_to_search".
+Set action to "booking" when user mentions a property number to view.`;
 
-    // Last 6 messages only for cost control
+    // ============================================
+    // BUILD MESSAGES - LAST 6 ONLY FOR COST
+    // ============================================
     const recentHistory = (conversationHistory || []).slice(-6);
+
     const messages = [
       ...recentHistory.map(m => ({
         role: m.role,
-        content: String(m.content || '').slice(0, 400)
+        content: typeof m.content === 'string'
+          ? m.content.slice(0, 400)
+          : String(m.content).slice(0, 400)
       })),
       { role: 'user', content: userMessage.slice(0, 600) }
     ];
 
+    // ============================================
+    // CALL CLAUDE HAIKU
+    // ============================================
     console.log('Calling Claude AI - stage:', stage);
+    console.log('API Key present:', !!process.env.ANTHROPIC_API_KEY);
 
     const anthropic = getAnthropicClient();
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 600,
+      max_tokens: 500,
       system: systemPrompt,
       messages
     });
 
     const raw = response.content?.[0]?.text || '';
-    console.log('Claude raw:', raw.substring(0, 300));
+    console.log('Claude raw:', raw.substring(0, 200));
 
-    // Parse JSON
+    // ============================================
+    // PARSE JSON RESPONSE
+    // ============================================
     let parsed;
     try {
       const cleaned = raw
@@ -367,22 +370,24 @@ EXTRACTION RULES:
         .replace(/```/gi, '')
         .trim();
 
+      // Find JSON object in response
       const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('No JSON in response');
+      if (!jsonMatch) throw new Error('No JSON found in response');
 
       parsed = JSON.parse(jsonMatch[0]);
     } catch (parseError) {
       console.error('JSON parse error:', parseError.message);
-      // Smart fallback instead of "I did not catch that"
+      console.error('Raw was:', raw);
+
       return {
-        message: `Let me make sure I understand — could you tell me a bit more about what you are looking for? 😊`,
+        message: `I did not quite catch that. Could you rephrase? 😊`,
         action: 'continue',
         extracted: {},
         confidence: 'low'
       };
     }
 
-    // Clean null extracted values
+    // Remove null extracted values
     if (parsed.extracted) {
       Object.keys(parsed.extracted).forEach(key => {
         if (parsed.extracted[key] === null || parsed.extracted[key] === undefined) {
@@ -391,8 +396,8 @@ EXTRACTION RULES:
       });
     }
 
-    // Force search if stage is ready
-    if (stage === 'ready_to_search' && parsed.action !== 'search_properties') {
+    // Safety: override action if stage says ready_to_search
+    if (stage === 'ready_to_search' && parsed.action === 'continue') {
       parsed.action = 'search_properties';
     }
 
@@ -402,9 +407,9 @@ EXTRACTION RULES:
     console.error('AI error:', error.message);
     return {
       message:
-        `Sorry, I ran into a small issue. 🙏\n\n` +
-        `Please contact our agent directly:\n` +
-        `👤 ${agentName || 'Agent'}: ${agentPhone || 'N/A'}\n\n` +
+        `Sorry, something went wrong.\n\n` +
+        `Please contact our agent:\n` +
+        `${agentName || 'Agent'}: ${agentPhone || 'N/A'}\n\n` +
         `Or reply *HI* to try again.`,
       action: 'human_handoff',
       extracted: {},
