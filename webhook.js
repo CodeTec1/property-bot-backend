@@ -452,6 +452,37 @@ router.post('/', async (req, res) => {
 let preExtracted = {};
 const msgLower = message.toLowerCase().trim();
 
+// ============================================
+// Detect completion date from DATABASE (DYNAMIC)
+// ============================================
+
+if (!preExtracted.completion_range && lead?.interest && lead?.location) {
+
+  const { data: propData } = await supabase
+    .from('properties')
+    .select('completion_date')
+    .eq('tenant_id', tenant.id)
+    .eq('available', true)
+    .ilike('type', lead.interest)
+    .ilike('location', lead.location);
+
+  if (propData && propData.length > 0) {
+    const availableDates = [
+      ...new Set(propData.map(p => p.completion_date).filter(Boolean))
+    ];
+
+    const userMsg = message.toLowerCase();
+
+    const matchedDate = availableDates.find(date =>
+      userMsg.includes(date.toLowerCase())
+    );
+
+    if (matchedDate) {
+      preExtracted.completion_range = matchedDate;
+    }
+  }
+}
+
 // Detect cancellation
 if (msgLower === 'cancel' && lead?.conversation_stage === 'booking_confirmed') {
   const cancelResponse = await fetch(
@@ -745,22 +776,39 @@ if (Object.keys(preExtracted).length > 0 && !preExtracted.restart) {
 
     quickUpdate.conversation_history = updatedHistory;
 
-    await supabase.from('leads').update(quickUpdate).eq('id', lead.id);
+await supabase.from('leads').update(quickUpdate).eq('id', lead.id);
 
-    // Fetch fresh lead to check if we can search now
-    const { data: freshLead } = await supabase
-      .from('leads')
-      .select('*')
-      .eq('id', lead.id)
-      .single();
+// Fetch fresh lead AFTER save
+const { data: freshLead } = await supabase
+  .from('leads')
+  .select('*')
+  .eq('id', lead.id)
+  .single();
 
-    // Check if ready to search
-    const readyToSearch = freshLead?.interest &&
-      freshLead?.location &&
-      freshLead?.size &&
-      freshLead?.budget &&
-      freshLead?.is_offplan !== null &&
-      freshLead?.is_offplan !== undefined;
+console.log('Fresh lead after update:', {
+  interest: freshLead?.interest,
+  location: freshLead?.location,
+  size: freshLead?.size,
+  budget: freshLead?.budget,
+  is_offplan: freshLead?.is_offplan,
+  completion_range: freshLead?.completion_range
+});
+
+// Ready to search - is_offplan can be true or false but not null/undefined
+const isOffplanSet = freshLead?.is_offplan === true || freshLead?.is_offplan === false;
+
+// If offplan is true, we need completion_range too
+const completionReady = freshLead?.is_offplan === false ||
+  (freshLead?.is_offplan === true && freshLead?.completion_range);
+
+const readyToSearch = freshLead?.interest &&
+  freshLead?.location &&
+  freshLead?.size &&
+  freshLead?.budget &&
+  isOffplanSet &&
+  completionReady;
+
+console.log('Ready to search:', readyToSearch, '| isOffplanSet:', isOffplanSet, '| completionReady:', completionReady);
 
     if (readyToSearch) {
       // Trigger search directly
@@ -778,14 +826,14 @@ if (Object.keys(preExtracted).length > 0 && !preExtracted.restart) {
 
       // Run property search
       const properties = await searchProperties(
-        tenant.id,
-        freshLead.interest,
-        freshLead.location,
-        freshLead.size,
-        freshLead.budget,
-        freshLead.is_offplan,
-        freshLead.completion_range
-      );
+      tenant.id,
+      freshLead.interest,
+      freshLead.location,
+      freshLead.size,
+      freshLead.budget,
+      freshLead.is_offplan,
+      freshLead.completion_range
+     );
 
       await handlePropertyResults(
         properties,

@@ -90,29 +90,15 @@ options.hasReady = propData.some(p => p.is_offplan === false);
 // Determine conversation stage
 // ============================================
 function getConversationStage(lead) {
-  if (!lead?.name) return 'need_name';
-
   if (!lead?.interest) return 'need_interest';
-
+  if (!lead?.name) return 'need_name';
+  if (lead?.interest !== 'Land' &&
+    lead?.is_offplan === null &&
+    lead?.is_offplan === undefined) return 'need_offplan';
+  if (lead?.is_offplan === true && !lead?.completion_range) return 'need_completion';
   if (!lead?.location) return 'need_location';
-
   if (!lead?.size) return 'need_size';
-
-  // Only ask offplan AFTER size (more natural)
-  if (
-    lead?.interest !== 'Land' &&
-    (lead?.is_offplan === null || lead?.is_offplan === undefined)
-  ) {
-    return 'need_offplan';
-  }
-
-  if (lead?.is_offplan === true && !lead?.completion_range) {
-    return 'need_completion';
-  }
-
-  // 🔥 Budget LAST
   if (!lead?.budget) return 'need_budget';
-
   return 'ready_to_search';
 }
 
@@ -293,18 +279,14 @@ Examples:
 
 === WHAT TO COLLECT NEXT ===
 Current stage: ${stage}
+${stage === 'need_interest' ? `Ask what they are looking for. Available types in our database: ${options.types?.join(', ') || 'Buy, Rent, Land'}. Do not mention other types.` : ''}
 ${stage === 'need_name' ? 'Ask for their name naturally.' : ''}
-${stage === 'need_interest' ? `Ask what they are looking for. Available types: ${options.types?.join(', ') || 'Buy, Rent, Land'}` : ''}
-${stage === 'need_offplan' ? 'Ask if they want a ready property or off-plan development.' : ''}
-${stage === 'need_completion' ? `Ask preferred completion timeframe. Available dates: ${options.completionDates?.join(', ') || '2026, 2027, 2028, 2029+'}` : ''}
-${stage === 'need_location' ? `Ask which area. Available locations: ${options.locations?.join(', ') || 'checking...'}` : ''}
-${stage === 'need_size' ? `Ask size/bedrooms. Available: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'checking...'}` : ''}
-${stage === 'need_budget' ? `
-In ${lead?.location || 'this area'}, a ${lead?.size || ''} property typically ranges between ${options.priceRange || 'various prices'}.
-
-What budget are you considering?
-` : ''}
-${stage === 'ready_to_search' ? 'All info collected. Set action to search_properties. Confirm search to user.' : ''}
+${stage === 'need_offplan' ? 'Ask if they want a ready property or off-plan development. Both options exist in our database.' : ''}
+${stage === 'need_completion' ? `Ask when they would like it completed. We have off-plan properties completing in: ${options.completionDates?.join(', ') || 'various dates'}. Present these exact options.` : ''}
+${stage === 'need_location' ? `Ask which area they prefer. We have properties in ONLY these locations: ${options.locations?.join(', ') || 'checking...'}. Only mention these exact locations.` : ''}
+${stage === 'need_size' ? `Ask for size or bedrooms. Available options in ${lead?.location || 'this area'}: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'checking...'}. Only mention these exact options.` : ''}
+${stage === 'need_budget' ? `Ask for budget. Properties matching their criteria range from ${options.priceRange || 'various prices'}. Mention this range to guide them.` : ''}
+${stage === 'ready_to_search' ? 'ALL information collected. You MUST set action to "search_properties". Confirm their full criteria and say you are searching.' : ''}
 
 
 === DATABASE OPTIONS ===
