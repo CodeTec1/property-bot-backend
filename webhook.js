@@ -452,6 +452,216 @@ router.post('/', async (req, res) => {
 let preExtracted = {};
 const msgLower = message.toLowerCase().trim();
 
+// Detect cancellation
+if (msgLower === 'cancel' && lead?.conversation_stage === 'booking_confirmed') {
+  const cancelResponse = await fetch(
+    `https://property-bot-backend.onrender.com/api/cancel-booking`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        leadId: lead.id,
+        calendarId: tenant.google_calendar_id
+      })
+    }
+  );
+  const cancelData = await cancelResponse.json();
+
+  await supabase
+    .from('leads')
+    .update({ conversation_stage: 'booking_cancelled' })
+    .eq('id', lead.id);
+
+  await sendMessage(tenantWhatsApp, from, cancelData.userMessage);
+
+  if (agentPhone) {
+    await sendTemplateToAgent(
+      tenantWhatsApp,
+      agentPhone,
+      TEMPLATES.BOOKING_CANCELLED,
+      { "1": lead.name || 'Unknown', "2": cleanLeadPhone }
+    );
+  }
+  return;
+}
+
+// Detect property selection
+const propertySelectMatch = msgLower.match(/^property\s*(\d+)$/i) ||
+  (lead?.conversation_stage === 'completed' && msgLower.match(/^(\d+)$/));
+
+if (propertySelectMatch) {
+  const propNum = parseInt(propertySelectMatch[1]);
+  console.log('Property selection detected:', propNum);
+
+  // Get search results
+  let searchResults = lead?.search_results || [];
+  if (!searchResults || searchResults.length === 0) {
+    const { data: freshLead } = await supabase
+      .from('leads')
+      .select('search_results')
+      .eq('id', lead.id)
+      .single();
+    searchResults = freshLead?.search_results || [];
+  }
+
+  const selectedProperty = searchResults.find(p => p.number === propNum);
+
+  if (selectedProperty) {
+    console.log('Found property:', selectedProperty.name);
+
+    await supabase
+      .from('leads')
+      .update({
+        selected_property_number: propNum,
+        selected_property_id: selectedProperty.id,
+        last_viewed_property: selectedProperty.name,
+        conversation_stage: 'awaiting_time_slot'
+      })
+      .eq('id', lead.id);
+
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Great choice! 🎉 Let me check availability for *${selectedProperty.name}*...`
+    );
+
+    // Get available slots
+    const slotsResponse = await fetch(
+      `https://property-bot-backend.onrender.com/api/available-slots-v2`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: tenant.id,
+          propertyId: selectedProperty.id,
+          leadId: lead.id
+        })
+      }
+    );
+    const slotsData = await slotsResponse.json();
+
+    await supabase
+      .from('leads')
+      .update({ available_slots: slotsData.slotMap })
+      .eq('id', lead.id);
+
+    await sendMessage(tenantWhatsApp, from, slotsData.message);
+    return;
+  }
+}
+
+// Detect slot selection
+const slotSelectMatch = lead?.conversation_stage === 'awaiting_time_slot' &&
+  (msgLower.match(/^slot\s*(\d+)$/i) || msgLower.match(/^(\d+)$/));
+
+if (slotSelectMatch) {
+  const slotNum = parseInt(slotSelectMatch[1]);
+  console.log('Slot selection detected:', slotNum);
+
+  const { data: freshLead } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('id', lead.id)
+    .single();
+
+  const propertyId = freshLead?.selected_property_id;
+  const slotMap = freshLead?.available_slots || '{}';
+
+  if (!propertyId) {
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, I lost track of which property you selected.\n\nReply *HI* to start over.`
+    );
+    return;
+  }
+
+  await sendMessage(tenantWhatsApp, from, `Creating your booking... ✅`);
+
+  const bookingResponse = await fetch(
+    `https://property-bot-backend.onrender.com/api/create-booking`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenantId: tenant.id,
+        leadId: lead.id,
+        propertyId: propertyId,
+        slotNumber: slotNum.toString(),
+        slotMap: slotMap,
+        leadName: freshLead?.name || 'Client',
+        leadPhone: from
+      })
+    }
+  );
+  const bookingData = await bookingResponse.json();
+
+  if (bookingData.success) {
+    await supabase
+      .from('leads')
+      .update({ conversation_stage: 'booking_confirmed' })
+      .eq('id', lead.id);
+
+    await sendMessage(tenantWhatsApp, from, bookingData.message);
+
+    if (agentPhone) {
+      await sendTemplateToAgent(
+        tenantWhatsApp,
+        agentPhone,
+        TEMPLATES.BOOKING_CONFIRMED,
+        {
+          "1": freshLead?.name || 'Unknown',
+          "2": cleanLeadPhone,
+          "3": bookingData.slotDetails?.property || 'N/A',
+          "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
+          "5": `KES ${freshLead?.budget || 'N/A'}`,
+          "6": freshLead?.location || 'N/A',
+          "7": bookingData.slotDetails?.date || 'N/A',
+          "8": bookingData.slotDetails?.time || 'N/A'
+        }
+      );
+    }
+
+  } else if (bookingData.slotTaken) {
+    const newSlotsResponse = await fetch(
+      `https://property-bot-backend.onrender.com/api/available-slots-v2`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: tenant.id,
+          propertyId: propertyId,
+          leadId: lead.id
+        })
+      }
+    );
+    const newSlotsData = await newSlotsResponse.json();
+
+    await supabase
+      .from('leads')
+      .update({
+        conversation_stage: 'awaiting_time_slot',
+        available_slots: newSlotsData.slotMap
+      })
+      .eq('id', lead.id);
+
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, that slot was just taken.\n\nHere are the next available times:\n\n${newSlotsData.message}`
+    );
+  } else {
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, something went wrong with your booking.\n\n` +
+      `Our agent will contact you shortly.\n\n` +
+      `Agent: ${agentName}\nPhone: ${agentPhone || 'N/A'}`
+    );
+  }
+  return;
+}
+
 // Detect yes/no for restart
 if (lead && ['new', 'new search', 'start over', 'restart'].includes(msgLower)) {
   preExtracted.restart = true;
@@ -998,33 +1208,66 @@ if (aiResult.action === 'search_properties') {
 
 // ACTION: booking
 if (aiResult.action === 'booking') {
-  const propertyNumber = aiResult.extracted?.property_number;
+  // Extract property number from message directly
+  // Do not rely on AI extraction alone
+  let propertyNumber = aiResult.extracted?.property_number;
+
+  // Also try to extract from message directly as backup
+  if (!propertyNumber) {
+    const match = message.match(/property\s*(\d+)/i) ||
+      message.match(/^(\d+)$/);
+    if (match) propertyNumber = parseInt(match[1]);
+  }
+
+  console.log('Booking property number:', propertyNumber);
 
   if (!propertyNumber) {
-    await sendMessage(tenantWhatsApp, from, aiResult.message);
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Please reply with the property number you want to view.\n\nExample: *Property1* or just *1*`
+    );
     return;
   }
 
-  await sendMessage(tenantWhatsApp, from, aiResult.message);
+  // Get saved search results - use lead directly first
+  let searchResults = lead?.search_results || [];
 
-  // Get saved search results
-  const { data: freshLead } = await supabase
-    .from('leads')
-    .select('search_results, selected_property_id')
-    .eq('id', lead.id)
-    .single();
+  // If not in lead object fetch fresh from database
+  if (!searchResults || searchResults.length === 0) {
+    const { data: freshLead } = await supabase
+      .from('leads')
+      .select('search_results')
+      .eq('id', lead.id)
+      .single();
 
-  const searchResults = freshLead?.search_results || [];
+    searchResults = freshLead?.search_results || [];
+  }
+
+  console.log('Search results count:', searchResults.length);
+  console.log('Looking for property number:', propertyNumber);
+
   const selectedProperty = searchResults.find(p => p.number === propertyNumber);
+
+  console.log('Selected property:', selectedProperty?.name);
 
   if (!selectedProperty) {
     await sendMessage(
       tenantWhatsApp,
       from,
-      `I could not find that property. Please reply with the property number from the list above.`
+      `I could not find property ${propertyNumber} in your search results.\n\n` +
+      `Please reply with a number from 1 to ${searchResults.length || '?'}.\n\n` +
+      `Or reply *HI* to start a new search.`
     );
     return;
   }
+
+  // Send confirmation message
+  await sendMessage(
+    tenantWhatsApp,
+    from,
+    `Great choice! 🎉 Let me check availability for *${selectedProperty.name}*...`
+  );
 
   // Save selection
   await supabase
