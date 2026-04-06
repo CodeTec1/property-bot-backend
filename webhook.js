@@ -235,9 +235,10 @@ if (isOffplan === true) {
     } else {
       const bedroomNumber = extractBedrooms(size);
       console.log('Extracted bedroom number:', bedroomNumber);
-      if (bedroomNumber) {
-        query = query.eq('bedrooms', bedroomNumber);
-      }
+      if (bedroomNumber !== null && bedroomNumber !== undefined) {
+  query = query.eq('bedrooms', bedroomNumber);
+  console.log('Filtering by bedrooms:', bedroomNumber);
+}
     }
 
     const { data, error } = await query;
@@ -725,7 +726,7 @@ if (['ready', 'ready to move', 'move in', 'completed', '1', 'ready property'].in
 const bedroomMatch = msgLower.match(/^(\d+)$/) ||
   msgLower.match(/(\d+)\s*bed/) ||
   msgLower.match(/(\d+)\s*bedroom/);
-if (bedroomMatch && lead?.conversation_stage === 'continue') {
+if (bedroomMatch && (lead?.conversation_stage === 'continue' || !lead?.size)) {
   const num = parseInt(bedroomMatch[1]);
   if (num >= 0 && num <= 10) {
     preExtracted.bedrooms = num;
