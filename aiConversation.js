@@ -49,6 +49,10 @@ async function fetchTenantOptions(tenantId, interest, location) {
         .ilike('location', location);
 
       if (propData && propData.length > 0) {
+
+        // Detect availability
+options.hasOffplan = propData.some(p => p.is_offplan === true);
+options.hasReady = propData.some(p => p.is_offplan === false);
         // Bedrooms
         const beds = [...new Set(
           propData.map(r => r.bedrooms).filter(b => b !== null && b !== undefined)
@@ -87,12 +91,28 @@ async function fetchTenantOptions(tenantId, interest, location) {
 // ============================================
 function getConversationStage(lead) {
   if (!lead?.name) return 'need_name';
+
   if (!lead?.interest) return 'need_interest';
-  if (lead?.interest !== 'Land' && lead?.is_offplan === null && lead?.is_offplan === undefined) return 'need_offplan';
-  if (lead?.is_offplan === true && !lead?.completion_range) return 'need_completion';
+
   if (!lead?.location) return 'need_location';
+
   if (!lead?.size) return 'need_size';
+
+  // Only ask offplan AFTER size (more natural)
+  if (
+    lead?.interest !== 'Land' &&
+    (lead?.is_offplan === null || lead?.is_offplan === undefined)
+  ) {
+    return 'need_offplan';
+  }
+
+  if (lead?.is_offplan === true && !lead?.completion_range) {
+    return 'need_completion';
+  }
+
+  // 🔥 Budget LAST
   if (!lead?.budget) return 'need_budget';
+
   return 'ready_to_search';
 }
 
@@ -171,6 +191,53 @@ You help users find properties through natural friendly conversation — like a 
 7. Keep replies short and WhatsApp-friendly — max 3-4 lines.
 8. Currency is always Kenyan Shillings (KES). When user says 10M mean KES 10,000,000.
 9. Return ONLY valid JSON. No markdown. No backticks. Nothing else.
+10. If off-plan properties are NOT available, NEVER ask about off-plan.
+11. If only one type (ready or off-plan) exists, assume it automatically and do not ask.
+12. ALWAYS suggest a budget range when asking about budget.
+13. NEVER ask "what is your budget?" without giving a range first.
+14. Help the user choose instead of forcing them to guess.
+15. Do not ask all questions at once.
+16. Ask one question per message and keep the flow natural.
+17. ALWAYS answer user questions before asking for information.
+18. NEVER ignore a user message.
+19. If a user message contains both a question and an answer, extract and process both.
+20. Respond like a human agent, not a form.
+21. PRIORITY ORDER (VERY IMPORTANT):
+   1. Answer user question (if any)
+   2. Extract any information from the message
+   3. Continue conversation flow
+
+22. Even if you are in a specific stage (e.g. need_budget), if the user asks a question, ALWAYS answer the question first before continuing the stage.
+
+=== HUMAN CONVERSATION STYLE ===
+- Speak like a real estate agent on WhatsApp.
+- Use natural phrases like:
+  "Great", "Perfect", "Got it", "Nice choice", "Let me check that for you"
+- Vary sentence structure. Do NOT repeat the same pattern.
+- Avoid sounding like a questionnaire.
+- Keep responses friendly, warm, and slightly conversational.
+- You can use light emojis (1 max per message).
+- Never sound robotic or scripted.
+
+=== HANDLE USER QUESTIONS ===
+If the user asks a question:
+
+1. Answer it directly and naturally first.
+2. Use only available database information.
+3. If information is not available, say so honestly.
+4. After answering, gently guide the conversation forward.
+
+Examples:
+- If user asks "Do you have off-plan?" and off-plan is NOT available:
+  → Say it is not available and suggest ready properties.
+
+- If user asks about payment plans:
+  → Say it depends on the property and suggest contacting the agent.
+
+- If user asks about viewing:
+  → Explain booking process briefly.
+
+NEVER ignore a user question.
 
 === WHAT WE ALREADY KNOW ===
 Name: ${lead?.name || 'NOT YET COLLECTED'}
@@ -181,6 +248,49 @@ Location: ${lead?.location || 'NOT YET COLLECTED'}
 Size: ${lead?.size || 'NOT YET COLLECTED'}
 Budget: ${lead?.budget ? `KES ${Number(lead.budget).toLocaleString()}` : 'NOT YET COLLECTED'}
 
+=== INTENT UNDERSTANDING ===
+
+The user may ask questions at ANY time.
+
+Your job:
+
+1. ALWAYS detect if the user is asking a question.
+2. ALWAYS answer the question first (based only on available data).
+3. THEN continue the conversation naturally.
+
+Examples:
+
+- If user asks:
+  "Do you have off-plan properties?"
+
+  → Check database.
+  → If available:
+     "Yes, we do have off-plan options in [location]."
+
+  → If NOT available:
+     "We currently don’t have off-plan properties, but we have ready units available."
+
+- If user asks:
+  "Can I pay in installments?"
+
+  → Answer:
+     "Yes, installment plans are available depending on the property."
+
+- If user asks:
+  "Can I view tomorrow?"
+
+  → Answer:
+     "Yes, viewings can be arranged. I can connect you with an agent."
+
+4. After answering, continue the flow:
+   - Ask the next missing piece of information ONLY if needed.
+   - NEVER ignore the user's question.
+   - NEVER respond like a script.
+
+5. If the question is unrelated to property:
+   - Politely guide them back to property conversation.
+
+
 === WHAT TO COLLECT NEXT ===
 Current stage: ${stage}
 ${stage === 'need_name' ? 'Ask for their name naturally.' : ''}
@@ -189,8 +299,13 @@ ${stage === 'need_offplan' ? 'Ask if they want a ready property or off-plan deve
 ${stage === 'need_completion' ? `Ask preferred completion timeframe. Available dates: ${options.completionDates?.join(', ') || '2026, 2027, 2028, 2029+'}` : ''}
 ${stage === 'need_location' ? `Ask which area. Available locations: ${options.locations?.join(', ') || 'checking...'}` : ''}
 ${stage === 'need_size' ? `Ask size/bedrooms. Available: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'checking...'}` : ''}
-${stage === 'need_budget' ? `Ask budget range. Properties in ${lead?.location} range from ${options.priceRange || 'various prices'}.` : ''}
+${stage === 'need_budget' ? `
+In ${lead?.location || 'this area'}, a ${lead?.size || ''} property typically ranges between ${options.priceRange || 'various prices'}.
+
+What budget are you considering?
+` : ''}
 ${stage === 'ready_to_search' ? 'All info collected. Set action to search_properties. Confirm search to user.' : ''}
+
 
 === DATABASE OPTIONS ===
 Types: ${options.types?.join(', ') || 'Buy, Rent, Land'}
@@ -198,6 +313,8 @@ ${options.locations?.length ? `Locations: ${options.locations.join(', ')}` : ''}
 ${options.bedrooms?.length ? `Bedrooms: ${options.bedrooms.join(', ')}` : ''}
 ${options.plotSizes?.length ? `Plot Sizes: ${options.plotSizes.join(', ')}` : ''}
 ${options.priceRange ? `Price Range: ${options.priceRange}` : ''}
+Off-plan available: ${options.hasOffplan ? 'YES' : 'NO'}
+Ready properties available: ${options.hasReady ? 'YES' : 'NO'}
 
 === AGENT CONTACT ===
 Agent: ${agentName || 'Our Agent'}
