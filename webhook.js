@@ -282,6 +282,123 @@ function formatKenyaTime(isoString) {
 }
 
 // ============================================
+// Helper: Handle property search results
+// ============================================
+async function handlePropertyResults(
+  properties, lead, tenant, tenantWhatsApp,
+  from, agentName, agentPhone, cleanLeadPhone, kenyaTime
+) {
+  if (properties.length > 0) {
+    const searchResultsToSave = properties.map((p, i) => ({
+      number: i + 1,
+      id: p.id,
+      name: p.property_name,
+      price: p.price,
+      location: p.location,
+      address: p.address,
+      bedrooms: p.bedrooms,
+      plot_size: p.plot_size,
+      type: p.type,
+      photo_url: p.photo_url
+    }));
+
+    await supabase
+      .from('leads')
+      .update({
+        search_results: searchResultsToSave,
+        conversation_stage: 'completed',
+        status: 'Contacted'
+      })
+      .eq('id', lead.id);
+
+    for (let i = 0; i < properties.length; i++) {
+      const property = properties[i];
+
+      const sizeText = property.type === 'Land'
+        ? `${property.plot_size}`
+        : property.bedrooms === 0 ? 'Studio'
+        : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
+
+      const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
+      const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
+
+      const propertyHeader =
+        `🏢 *PROPERTY ${i + 1}*\n` +
+        `──────────\n\n` +
+        (property.project_name ? `*${property.project_name}*\n` : '') +
+        `*${property.property_name}*\n\n` +
+        `📍 ${property.location}\n` +
+        `💰 ${priceFormatted}\n` +
+        `🛏 ${sizeText}${sqmText}\n` +
+        (property.completion_date ? `🏗 Completion: ${property.completion_date}\n` : '') +
+        `📮 ${property.address}`;
+
+      const descriptionText = property.description ? `\n\n${property.description}` : '';
+      const footer = `\n\n──────────\nReply *Property${i + 1}* to book a viewing`;
+      const fullMessage = propertyHeader + descriptionText + footer;
+
+      if (fullMessage.length <= 1500) {
+        await sendMessage(tenantWhatsApp, from, fullMessage, property.photo_url || null);
+      } else {
+        await sendMessage(tenantWhatsApp, from, propertyHeader + footer, property.photo_url || null);
+        if (property.description) {
+          await delay(1000);
+          const chunks = [];
+          let start = 0;
+          while (start < property.description.length) {
+            let end = start + 1500;
+            if (end < property.description.length) {
+              const lastNewline = property.description.lastIndexOf('\n', end);
+              if (lastNewline > start) end = lastNewline;
+            }
+            chunks.push(property.description.substring(start, end));
+            start = end;
+          }
+          for (const chunk of chunks) {
+            await sendMessage(tenantWhatsApp, from, chunk, null);
+            await delay(1000);
+          }
+        }
+      }
+
+      if (i < properties.length - 1) await delay(2000);
+    }
+
+    await delay(1500);
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Found ${properties.length} propert${properties.length > 1 ? 'ies' : 'y'} for you! 🏡\n\n` +
+      `Reply *Property1*${properties.length > 1 ? `, *Property2*` : ''} etc. to book a viewing.`
+    );
+
+  } else {
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, I could not find properties matching your exact criteria.\n\n` +
+      `Our agent will contact you personally:\n` +
+      `👤 ${agentName || 'Agent'}\n` +
+      `📞 ${agentPhone || 'N/A'}\n\n` +
+      `Reply *HI* to start a new search.`
+    );
+
+    if (agentPhone) {
+      await sendTemplateToAgent(
+        tenantWhatsApp,
+        agentPhone,
+        TEMPLATES.NO_PROPERTY_FOUND,
+        {
+          "1": lead.name || 'Unknown',
+          "2": cleanLeadPhone,
+          "3": kenyaTime
+        }
+      );
+    }
+  }
+}
+
+// ============================================
 // WEBHOOK: Receive WhatsApp messages from Twilio
 // ============================================
 router.post('/', async (req, res) => {
@@ -329,6 +446,186 @@ router.post('/', async (req, res) => {
     });
 
     // ============================================
+// PRE-PROCESS SIMPLE RESPONSES BEFORE AI
+// This saves cost and improves accuracy
+// ============================================
+let preExtracted = {};
+const msgLower = message.toLowerCase().trim();
+
+// Detect yes/no for restart
+if (lead && ['new', 'new search', 'start over', 'restart'].includes(msgLower)) {
+  preExtracted.restart = true;
+}
+
+// Detect property type
+if (['buy', 'buying', 'purchase', 'i want to buy', "i'm looking to buy"].includes(msgLower) ||
+    msgLower.includes('looking to buy') || msgLower.includes('want to buy')) {
+  preExtracted.interest = 'Buy';
+}
+if (['rent', 'renting', 'rental', 'i want to rent', "i'm looking to rent"].includes(msgLower) ||
+    msgLower.includes('looking to rent') || msgLower.includes('want to rent')) {
+  preExtracted.interest = 'Rent';
+}
+if (['land', 'i want land', 'plot'].includes(msgLower)) {
+  preExtracted.interest = 'Land';
+}
+
+// Detect off-plan preference
+if (['offplan', 'off-plan', 'off plan', 'under construction', '2', 'yes offplan'].includes(msgLower) ||
+    msgLower.includes('off plan') || msgLower.includes('off-plan') || msgLower.includes('offplan')) {
+  preExtracted.is_offplan = true;
+}
+if (['ready', 'ready to move', 'move in', 'completed', '1', 'ready property'].includes(msgLower) ||
+    msgLower.includes('ready to move') || msgLower.includes('move in')) {
+  preExtracted.is_offplan = false;
+}
+
+// Detect bedroom numbers
+const bedroomMatch = msgLower.match(/^(\d+)$/) ||
+  msgLower.match(/(\d+)\s*bed/) ||
+  msgLower.match(/(\d+)\s*bedroom/);
+if (bedroomMatch && lead?.conversation_stage === 'continue') {
+  const num = parseInt(bedroomMatch[1]);
+  if (num >= 0 && num <= 10) {
+    preExtracted.bedrooms = num;
+    preExtracted.size = num === 0 ? 'Studio' : `${num} bedroom`;
+  }
+}
+
+// Detect budget
+const budgetPatterns = [
+  { pattern: /^(\d+\.?\d*)\s*m$/i, multiplier: 1000000 },
+  { pattern: /^(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
+  { pattern: /^(\d+\.?\d*)\s*k$/i, multiplier: 1000 },
+  { pattern: /^kes\s*(\d+[\d,]*)/i, multiplier: 1 },
+  { pattern: /^(\d+[\d,]+)$/, multiplier: 1 }
+];
+
+for (const { pattern, multiplier } of budgetPatterns) {
+  const match = msgLower.match(pattern);
+  if (match) {
+    const amount = parseFloat(match[1].replace(/,/g, '')) * multiplier;
+    if (!isNaN(amount) && amount > 0) {
+      preExtracted.budget = amount;
+      break;
+    }
+  }
+}
+
+// If we have pre-extracted data, save it directly WITHOUT calling AI
+if (Object.keys(preExtracted).length > 0 && !preExtracted.restart) {
+  console.log('Pre-extracted data (no AI needed):', preExtracted);
+
+  const quickUpdate = { conversation_history: [] };
+
+  if (preExtracted.interest) quickUpdate.interest = preExtracted.interest;
+  if (preExtracted.location) quickUpdate.location = preExtracted.location;
+  if (preExtracted.is_offplan !== undefined) quickUpdate.is_offplan = preExtracted.is_offplan;
+  if (preExtracted.bedrooms !== undefined) quickUpdate.bedrooms = preExtracted.bedrooms;
+  if (preExtracted.size) quickUpdate.size = preExtracted.size;
+  if (preExtracted.budget) quickUpdate.budget = preExtracted.budget.toString();
+  if (preExtracted.completion_range) quickUpdate.completion_range = preExtracted.completion_range;
+
+  // Update lead immediately
+  if (lead) {
+    const updatedHistory = [
+      ...(lead.conversation_history || []),
+      { role: 'user', content: message }
+    ].slice(-10);
+
+    quickUpdate.conversation_history = updatedHistory;
+
+    await supabase.from('leads').update(quickUpdate).eq('id', lead.id);
+
+    // Fetch fresh lead to check if we can search now
+    const { data: freshLead } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', lead.id)
+      .single();
+
+    // Check if ready to search
+    const readyToSearch = freshLead?.interest &&
+      freshLead?.location &&
+      freshLead?.size &&
+      freshLead?.budget &&
+      freshLead?.is_offplan !== null &&
+      freshLead?.is_offplan !== undefined;
+
+    if (readyToSearch) {
+      // Trigger search directly
+      await sendMessage(
+        tenantWhatsApp,
+        from,
+        `✅ Got it! Let me find the best matches for you...\n\n` +
+        `📋 Your preferences:\n` +
+        `• Type: ${freshLead.interest}\n` +
+        `• Location: ${freshLead.location}\n` +
+        `• Size: ${freshLead.size}\n` +
+        `• Budget: KES ${Number(freshLead.budget).toLocaleString()}\n\n` +
+        `Searching properties... 🔍`
+      );
+
+      // Run property search
+      const properties = await searchProperties(
+        tenant.id,
+        freshLead.interest,
+        freshLead.location,
+        freshLead.size,
+        freshLead.budget,
+        freshLead.is_offplan,
+        freshLead.completion_range
+      );
+
+      await handlePropertyResults(
+        properties,
+        freshLead,
+        tenant,
+        tenantWhatsApp,
+        from,
+        agentName,
+        agentPhone,
+        cleanLeadPhone,
+        kenyaTime
+      );
+
+      return;
+    }
+
+    // Not ready yet - use AI to ask for next missing piece
+    const { data: latestLead } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', lead.id)
+      .single();
+
+    const aiResult = await processAIConversation({
+      userMessage: '[acknowledged, ask for next missing field only]',
+      lead: latestLead,
+      tenant: tenant,
+      conversationHistory: quickUpdate.conversation_history,
+      agentName: agentName,
+      agentPhone: agentPhone,
+      isNewLead: false
+    });
+
+    // Add AI response to history
+    const finalHistory = [
+      ...quickUpdate.conversation_history,
+      { role: 'assistant', content: aiResult.message }
+    ].slice(-10);
+
+    await supabase
+      .from('leads')
+      .update({ conversation_history: finalHistory })
+      .eq('id', lead.id);
+
+    await sendMessage(tenantWhatsApp, from, aiResult.message);
+    return;
+  }
+}
+
+    // ============================================
 // AI CONVERSATION ENGINE
 // ============================================
 
@@ -373,18 +670,96 @@ const leadUpdateData = {
   conversation_stage: aiResult.action
 };
 
-// Apply extracted fields
+// Apply extracted fields - be very explicit about every field
 if (aiResult.extracted) {
   const e = aiResult.extracted;
-  if (e.name) leadUpdateData.name = e.name;
-  if (e.interest) leadUpdateData.interest = e.interest;
-  if (e.location) leadUpdateData.location = e.location;
-  if (e.size) leadUpdateData.size = e.size;
-  if (e.bedrooms !== null && e.bedrooms !== undefined) leadUpdateData.bedrooms = e.bedrooms;
-  if (e.budget) leadUpdateData.budget = e.budget.toString();
-  if (e.is_offplan !== null && e.is_offplan !== undefined) leadUpdateData.is_offplan = e.is_offplan;
-  if (e.completion_range) leadUpdateData.completion_range = e.completion_range;
+
+  // Name
+  if (e.name && e.name !== null) {
+    leadUpdateData.name = e.name;
+  }
+
+  // Interest - normalize to proper case
+  if (e.interest && e.interest !== null) {
+    const interestMap = {
+      'buy': 'Buy', 'buying': 'Buy', 'purchase': 'Buy',
+      'rent': 'Rent', 'renting': 'Rent', 'rental': 'Rent',
+      'land': 'Land'
+    };
+    leadUpdateData.interest = interestMap[e.interest.toLowerCase()] || e.interest;
+  }
+
+  // Location - normalize to title case
+  if (e.location && e.location !== null) {
+    leadUpdateData.location = e.location
+      .split(' ')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  // Size and bedrooms - handle both together
+  if (e.bedrooms !== null && e.bedrooms !== undefined) {
+    const bedroomNum = parseInt(e.bedrooms);
+    if (!isNaN(bedroomNum)) {
+      leadUpdateData.size = bedroomNum === 0 ? 'Studio' : `${bedroomNum} bedroom`;
+    }
+  } else if (e.size && e.size !== null) {
+    leadUpdateData.size = e.size;
+    // Also extract bedroom number from size string
+    if (e.size.toLowerCase().includes('studio')) {
+      // keep as studio
+    } else {
+      const match = e.size.match(/(\d+)/);
+      if (match) {
+        leadUpdateData.bedrooms = parseInt(match[1]);
+      }
+    }
+  }
+
+  // Budget - handle KES, M, K formats
+  if (e.budget !== null && e.budget !== undefined) {
+    let budgetValue = e.budget;
+    if (typeof budgetValue === 'string') {
+      // Remove KES and spaces
+      budgetValue = budgetValue.replace(/KES/gi, '').replace(/,/g, '').trim();
+      // Handle M (millions) and K (thousands)
+      if (budgetValue.toLowerCase().includes('m')) {
+        budgetValue = parseFloat(budgetValue) * 1000000;
+      } else if (budgetValue.toLowerCase().includes('k')) {
+        budgetValue = parseFloat(budgetValue) * 1000;
+      } else {
+        budgetValue = parseFloat(budgetValue);
+      }
+    }
+    if (!isNaN(budgetValue) && budgetValue > 0) {
+      leadUpdateData.budget = budgetValue.toString();
+    }
+  }
+
+  // Off-plan preference
+  if (e.is_offplan !== null && e.is_offplan !== undefined) {
+    leadUpdateData.is_offplan = e.is_offplan;
+  }
+
+  // Completion range
+  if (e.completion_range && e.completion_range !== null) {
+    leadUpdateData.completion_range = e.completion_range;
+  }
+
+  // Handle restart - clear everything for fresh search
+  if (e.restart === true) {
+    leadUpdateData.interest = null;
+    leadUpdateData.location = null;
+    leadUpdateData.size = null;
+    leadUpdateData.budget = null;
+    leadUpdateData.is_offplan = null;
+    leadUpdateData.completion_range = null;
+    leadUpdateData.search_results = null;
+    leadUpdateData.conversation_history = [];
+  }
 }
+
+console.log('Updating lead with:', JSON.stringify(leadUpdateData, null, 2));
 
 // Handle restart - clear lead data for fresh search
 if (aiResult.extracted?.restart) {
