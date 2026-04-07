@@ -73,8 +73,16 @@ options.hasReady = propData.some(p => p.is_offplan === false);
         // Price range
         // Price range - filter by offplan status if known for accurate range
         let priceSource = propData;
-        if (isOffplan === true) priceSource = propData.filter(p => p.is_offplan === true);
-        if (isOffplan === false) priceSource = propData.filter(p => p.is_offplan === false);
+
+if (isOffplan === true) {
+  const offplanData = propData.filter(p => p.is_offplan === true);
+  if (offplanData.length > 0) priceSource = offplanData;
+}
+
+if (isOffplan === false) {
+  const readyData = propData.filter(p => p.is_offplan === false);
+  if (readyData.length > 0) priceSource = readyData;
+}
 
         const prices = priceSource.map(r => r.price).filter(p => p && p > 0).sort((a, b) => a - b);
         if (prices.length > 0) {
@@ -211,6 +219,12 @@ You help users find properties through natural friendly conversation — like a 
    3. Continue conversation flow
 
 22. Even if you are in a specific stage (e.g. need_budget), if the user asks a question, ALWAYS answer the question first before continuing the stage.
+23. If user gives unclear answer, DO NOT say you didn’t understand.
+Instead:
+- Rephrase the question
+- Show available options again
+- Guide the user clearly
+
 
 === HUMAN CONVERSATION STYLE ===
 - Speak like a real estate agent on WhatsApp.
@@ -400,6 +414,40 @@ Set action to "booking" when user mentions a property number to view.`;
       { role: 'user', content: userMessage.slice(0, 600) }
     ];
 
+    const normalizedMsg = msg.toLowerCase();
+
+// Smart quick extraction BEFORE AI
+const quickExtract = {};
+
+if (options.types?.some(t => normalizedMsg.includes(t.toLowerCase()))) {
+  quickExtract.interest = options.types.find(t =>
+    normalizedMsg.includes(t.toLowerCase())
+  );
+}
+
+if (options.locations?.some(l => normalizedMsg.includes(l.toLowerCase()))) {
+  quickExtract.location = options.locations.find(l =>
+    normalizedMsg.includes(l.toLowerCase())
+  );
+}
+
+if (normalizedMsg.includes('offplan') || normalizedMsg.includes('off-plan')) {
+  quickExtract.is_offplan = true;
+}
+
+if (normalizedMsg.includes('ready')) {
+  quickExtract.is_offplan = false;
+}
+
+if (stage === 'need_offplan') {
+  if (!options.hasOffplan && options.hasReady) {
+    lead.is_offplan = false;
+  }
+
+  if (!options.hasReady && options.hasOffplan) {
+    lead.is_offplan = true;
+  }
+}
     // ============================================
     // CALL CLAUDE HAIKU
     // ============================================
@@ -440,11 +488,17 @@ Set action to "booking" when user mentions a property number to view.`;
       const stageFallbacks = {
         'need_interest': `Are you looking to Buy, Rent, or purchase Land?`,
         'need_name': `Could you share your name? 😊`,
-        'need_location': `Which area are you interested in?`,
+        'need_location': options.locations?.length
+  ? `Which area are you interested in? We have: ${options.locations.join(', ')}`
+  : `Which area do you prefer?`,
         'need_offplan': `Are you looking for a ready property or an off-plan development?`,
         'need_completion': `When would you like the property completed?`,
-        'need_size': `How many bedrooms are you looking for?`,
-        'need_budget': `What is your budget range?`,
+        'need_size': options.bedrooms?.length
+  ? `How many bedrooms? Available: ${options.bedrooms.join(', ')}`
+  : `How many bedrooms are you looking for?`,
+        'need_budget': options.priceRange
+  ? `What is your budget? Properties range from ${options.priceRange}`
+  : `What is your budget range?`,
         'ready_to_search': `Let me search for properties matching your criteria...`
       };
       const currentStage = getConversationStage(lead);
