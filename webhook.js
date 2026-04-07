@@ -768,6 +768,30 @@ if (Object.keys(preExtracted).length > 0 && !preExtracted.restart) {
   if (preExtracted.budget) quickUpdate.budget = preExtracted.budget.toString();
   if (preExtracted.completion_range) quickUpdate.completion_range = preExtracted.completion_range;
 
+  // Force valid offplan logic based on DB
+if (preExtracted.is_offplan !== undefined && lead?.interest && lead?.location) {
+  const { data: propData } = await supabase
+    .from('properties')
+    .select('is_offplan')
+    .eq('tenant_id', tenant.id)
+    .eq('available', true)
+    .ilike('type', lead.interest)
+    .ilike('location', lead.location);
+
+  if (propData && propData.length > 0) {
+    const hasOffplan = propData.some(p => p.is_offplan === true);
+    const hasReady = propData.some(p => p.is_offplan === false);
+
+    if (preExtracted.is_offplan === true && !hasOffplan) {
+      preExtracted.is_offplan = false;
+    }
+
+    if (preExtracted.is_offplan === false && !hasReady) {
+      preExtracted.is_offplan = true;
+    }
+  }
+}
+
   // Update lead immediately
   if (lead) {
     const updatedHistory = [
@@ -859,7 +883,7 @@ console.log('Ready to search:', readyToSearch, '| isOffplanSet:', isOffplanSet, 
       .single();
 
     const aiResult = await processAIConversation({
-      userMessage: '[acknowledged, ask for next missing field only]',
+      userMessage: message,
       lead: latestLead,
       tenant: tenant,
       conversationHistory: quickUpdate.conversation_history,

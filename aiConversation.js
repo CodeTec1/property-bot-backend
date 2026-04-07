@@ -416,36 +416,46 @@ Set action to "booking" when user mentions a property number to view.`;
 
     const normalizedMsg = msg.toLowerCase();
 
-// Smart quick extraction BEFORE AI
+// Smart quick extraction BEFORE AI (SAFE FALLBACK VERSION)
 const quickExtract = {};
 
-if (options.types?.some(t => normalizedMsg.includes(t.toLowerCase()))) {
-  quickExtract.interest = options.types.find(t =>
+// Extract interest ONLY if not already set
+if (!lead?.interest) {
+  const foundType = options.types?.find(t =>
     normalizedMsg.includes(t.toLowerCase())
   );
+  if (foundType) {
+    quickExtract.interest = foundType;
+  }
 }
 
-if (options.locations?.some(l => normalizedMsg.includes(l.toLowerCase()))) {
-  quickExtract.location = options.locations.find(l =>
+// Extract location ONLY if not already set
+if (!lead?.location) {
+  const foundLocation = options.locations?.find(l =>
     normalizedMsg.includes(l.toLowerCase())
   );
+  if (foundLocation) {
+    quickExtract.location = foundLocation;
+  }
 }
 
-if (normalizedMsg.includes('offplan') || normalizedMsg.includes('off-plan')) {
-  quickExtract.is_offplan = true;
+// Offplan detection ONLY if not already set
+if (lead?.is_offplan === undefined || lead?.is_offplan === null) {
+  if (normalizedMsg.includes('offplan') || normalizedMsg.includes('off-plan')) {
+    quickExtract.is_offplan = true;
+  } else if (normalizedMsg.includes('ready')) {
+    quickExtract.is_offplan = false;
+  }
 }
 
-if (normalizedMsg.includes('ready')) {
-  quickExtract.is_offplan = false;
-}
-
-if (stage === 'need_offplan') {
+// Stage-specific fallback (only if lead has no value yet)
+if (stage === 'need_offplan' && lead?.is_offplan === undefined) {
   if (!options.hasOffplan && options.hasReady) {
-    lead.is_offplan = false;
+    quickExtract.is_offplan = false;
   }
 
   if (!options.hasReady && options.hasOffplan) {
-    lead.is_offplan = true;
+    quickExtract.is_offplan = true;
   }
 }
     // ============================================
