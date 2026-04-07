@@ -9,7 +9,7 @@ function getAnthropicClient() {
 // ============================================
 // Fetch live options from database
 // ============================================
-async function fetchTenantOptions(tenantId, interest, location) {
+async function fetchTenantOptions(tenantId, interest, location, isOffplan = null) {
   try {
     const options = {};
 
@@ -39,14 +39,21 @@ async function fetchTenantOptions(tenantId, interest, location) {
     }
 
     // Bedrooms, plot sizes and prices for interest + location
+    // Bedrooms, plot sizes and prices for interest + location
     if (interest && location) {
-      const { data: propData } = await supabase
+      let propQuery = supabase
         .from('properties')
         .select('bedrooms, plot_size, price, is_offplan, completion_date')
         .eq('tenant_id', tenantId)
         .eq('available', true)
         .ilike('type', interest)
         .ilike('location', location);
+
+      // Filter by offplan status if known - makes bedrooms and prices accurate
+      if (isOffplan === true) propQuery = propQuery.eq('is_offplan', true);
+      if (isOffplan === false) propQuery = propQuery.eq('is_offplan', false);
+
+      const { data: propData } = await propQuery;
 
       if (propData && propData.length > 0) {
 
@@ -64,7 +71,12 @@ options.hasReady = propData.some(p => p.is_offplan === false);
         if (plots.length > 0) options.plotSizes = plots;
 
         // Price range
-        const prices = propData.map(r => r.price).filter(p => p && p > 0).sort((a, b) => a - b);
+        // Price range - filter by offplan status if known for accurate range
+        let priceSource = propData;
+        if (isOffplan === true) priceSource = propData.filter(p => p.is_offplan === true);
+        if (isOffplan === false) priceSource = propData.filter(p => p.is_offplan === false);
+
+        const prices = priceSource.map(r => r.price).filter(p => p && p > 0).sort((a, b) => a - b);
         if (prices.length > 0) {
           options.minPrice = prices[0];
           options.maxPrice = prices[prices.length - 1];
@@ -92,11 +104,12 @@ options.hasReady = propData.some(p => p.is_offplan === false);
 function getConversationStage(lead) {
   if (!lead?.interest) return 'need_interest';
   if (!lead?.name) return 'need_name';
-  if (lead?.interest !== 'Land' &&
-    lead?.is_offplan === null &&
-    lead?.is_offplan === undefined) return 'need_offplan';
-  if (lead?.is_offplan === true && !lead?.completion_range) return 'need_completion';
   if (!lead?.location) return 'need_location';
+  if (lead?.interest !== 'Land') {
+    const offplanKnown = lead?.is_offplan === true || lead?.is_offplan === false;
+    if (!offplanKnown) return 'need_offplan';
+    if (lead?.is_offplan === true && !lead?.completion_range) return 'need_completion';
+  }
   if (!lead?.size) return 'need_size';
   if (!lead?.budget) return 'need_budget';
   return 'ready_to_search';
@@ -124,18 +137,21 @@ async function processAIConversation(params) {
     // ============================================
     // HANDLE GREETINGS WITHOUT AI - FREE
     // ============================================
-    if (['hi', 'hello', 'hey', 'start', 'restart'].includes(msg)) {
-      if (isNewLead || !lead) {
-        return {
-          message:
-            `Hello! 👋 Welcome to *${companyName}*\n\n` +
-            `I am ${botName}, your property assistant.\n\n` +
-            `What is your name?`,
-          action: 'continue',
-          extracted: {},
-          confidence: 'high'
-        };
-      } else {
+    if (['hi', 'hello', 'hey', 'start', 'restart', 'helo', 'hii'].includes(msg)) {
+  if (isNewLead || !lead) {
+    // Fetch types from database for this tenant
+    const greetingOptions = await fetchTenantOptions(tenant.id, null, null);
+    const typesList = greetingOptions.types?.join(', ') || 'Buy, Rent, Land';
+    return {
+      message:
+        `Hello! 👋 Welcome to *${companyName}*\n\n` +
+        `I am ${botName}, your property assistant.\n\n` +
+        `Are you looking to *${typesList}*?`,
+      action: 'continue',
+      extracted: {},
+      confidence: 'high'
+    };
+  } else {
         return {
           message:
             `Welcome back${lead.name ? `, ${lead.name}` : ''}! 👋\n\n` +
@@ -154,7 +170,8 @@ async function processAIConversation(params) {
     const options = await fetchTenantOptions(
       tenant.id,
       lead?.interest || null,
-      lead?.location || null
+      lead?.location || null,
+      lead?.is_offplan ?? null
     );
 
     const stage = getConversationStage(lead);
@@ -278,15 +295,55 @@ Examples:
 
 
 === WHAT TO COLLECT NEXT ===
-Current stage: ${stage}
-${stage === 'need_interest' ? `Ask what they are looking for. Available types in our database: ${options.types?.join(', ') || 'Buy, Rent, Land'}. Do not mention other types.` : ''}
-${stage === 'need_name' ? 'Ask for their name naturally.' : ''}
-${stage === 'need_offplan' ? 'Ask if they want a ready property or off-plan development. Both options exist in our database.' : ''}
-${stage === 'need_completion' ? `Ask when they would like it completed. We have off-plan properties completing in: ${options.completionDates?.join(', ') || 'various dates'}. Present these exact options.` : ''}
-${stage === 'need_location' ? `Ask which area they prefer. We have properties in ONLY these locations: ${options.locations?.join(', ') || 'checking...'}. Only mention these exact locations.` : ''}
-${stage === 'need_size' ? `Ask for size or bedrooms. Available options in ${lead?.location || 'this area'}: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'checking...'}. Only mention these exact options.` : ''}
-${stage === 'need_budget' ? `Ask for budget. Properties matching their criteria range from ${options.priceRange || 'various prices'}. Mention this range to guide them.` : ''}
-${stage === 'ready_to_search' ? 'ALL information collected. You MUST set action to "search_properties". Confirm their full criteria and say you are searching.' : ''}
+=== CONVERSATION FLOW — CURRENT STAGE: ${stage} ===
+
+YOU MUST ONLY ASK FOR THE CURRENT STAGE ITEM. DO NOT SKIP AHEAD.
+
+${stage === 'need_interest' ? `
+TASK: Ask what type of property they want.
+AVAILABLE TYPES IN DATABASE: ${options.types?.join(', ') || 'Buy, Rent'}
+RULE: ONLY mention types from the list above. Nothing else.
+EXAMPLE: "Are you looking to Buy, Rent, or purchase Land?"` : ''}
+
+${stage === 'need_name' ? `
+TASK: Ask for the user's name.
+EXAMPLE: "What's your name? I'd love to address you personally 😊"` : ''}
+
+${stage === 'need_location' ? `
+TASK: Ask which area/location they prefer.
+AVAILABLE LOCATIONS IN DATABASE: ${options.locations?.join(', ') || 'fetching...'}
+RULE: ONLY mention locations from the list above. Nothing else.
+EXAMPLE: "Which area interests you? We have properties in: ${options.locations?.join(', ') || '...'}"` : ''}
+
+${stage === 'need_offplan' ? `
+TASK: Ask if they want ready or off-plan.
+Off-plan available: ${options.hasOffplan ? 'YES' : 'NO'}
+Ready available: ${options.hasReady ? 'YES' : 'NO'}
+${!options.hasOffplan ? 'RULE: Only ready properties exist. Tell user and set is_offplan=false automatically.' : ''}
+${!options.hasReady ? 'RULE: Only off-plan exists. Tell user and set is_offplan=true automatically.' : ''}
+${options.hasOffplan && options.hasReady ? 'Ask: "Are you looking for a ready-to-move-in property or an off-plan development?"' : ''}` : ''}
+
+${stage === 'need_completion' ? `
+TASK: Ask preferred completion date.
+COMPLETION DATES IN DATABASE: ${options.completionDates?.join(', ') || 'various dates'}
+RULE: Only show dates from above. Do not invent dates.
+EXAMPLE: "When would you like it completed? We have: ${options.completionDates?.join(' or ') || '...'}"` : ''}
+
+${stage === 'need_size' ? `
+TASK: Ask for number of bedrooms or plot size.
+AVAILABLE IN ${lead?.location?.toUpperCase() || 'THIS AREA'}: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'fetching...'}
+RULE: ONLY mention options from the list above.
+EXAMPLE: "How many bedrooms? Available: ${options.bedrooms?.join(', ') || '...'}"` : ''}
+
+${stage === 'need_budget' ? `
+TASK: Ask for budget.
+PRICE RANGE FOR THEIR EXACT CRITERIA: ${options.priceRange || 'various prices'}
+RULE: Always show the price range. Never ask blind.
+EXAMPLE: "What is your budget? Properties in ${lead?.location} range from ${options.priceRange || '...'}"` : ''}
+
+${stage === 'ready_to_search' ? `
+TASK: ALL INFO COLLECTED. Set action to "search_properties".
+Confirm their preferences briefly and say you are searching now.` : ''}
 
 
 === DATABASE OPTIONS ===
@@ -379,9 +436,21 @@ Set action to "booking" when user mentions a property number to view.`;
       console.error('JSON parse error:', parseError.message);
       console.error('Raw was:', raw);
 
+      // Smart fallback based on current stage
+      const stageFallbacks = {
+        'need_interest': `Are you looking to Buy, Rent, or purchase Land?`,
+        'need_name': `Could you share your name? 😊`,
+        'need_location': `Which area are you interested in?`,
+        'need_offplan': `Are you looking for a ready property or an off-plan development?`,
+        'need_completion': `When would you like the property completed?`,
+        'need_size': `How many bedrooms are you looking for?`,
+        'need_budget': `What is your budget range?`,
+        'ready_to_search': `Let me search for properties matching your criteria...`
+      };
+      const currentStage = getConversationStage(lead);
       return {
-        message: `I did not quite catch that. Could you rephrase? 😊`,
-        action: 'continue',
+        message: stageFallbacks[currentStage] || `Could you tell me more about what you are looking for? 😊`,
+        action: currentStage === 'ready_to_search' ? 'search_properties' : 'continue',
         extracted: {},
         confidence: 'low'
       };
