@@ -860,18 +860,31 @@ router.post('/', async (req, res) => {
 
         quickUpdate.conversation_history = updatedHistory;
 
-        // Save the update
+       // Save the update
         await supabase
           .from('leads')
           .update(quickUpdate)
           .eq('id', lead.id);
 
-        // Fetch the COMPLETE lead record after update
-        const { data: freshLead } = await supabase
-          .from('leads')
-          .select('*')
-          .eq('id', lead.id)
-          .single();
+        // Build freshLead by merging existing lead with new updates
+        // Do NOT rely on database fetch — it may not reflect the update immediately
+        const freshLead = {
+          ...lead,           // all existing fields
+          ...quickUpdate,    // overwrite with what we just saved
+          // Remove conversation_history from the merge to keep it clean
+        };
+
+        // Fix budget — ensure it is string format
+        if (freshLead.budget) freshLead.budget = freshLead.budget.toString();
+
+        console.log('Fresh lead after merge:', {
+          interest: freshLead.interest,
+          location: freshLead.location,
+          size: freshLead.size,
+          budget: freshLead.budget,
+          is_offplan: freshLead.is_offplan,
+          completion_range: freshLead.completion_range
+        });
 
         console.log('Fresh lead after update:', {
           interest: freshLead?.interest,
