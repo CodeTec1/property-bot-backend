@@ -248,12 +248,6 @@ You help users find properties through natural friendly conversation — like a 
 24. NEVER skip the flow order. Budget ALWAYS comes last.
 25. If a user volunteers information early (e.g. says "I want a 2-bed in Kilimani"),
     extract it, save it, then ask ONLY for the next missing field in the flow.
-26. If the current conversation stage is need_budget, any number followed by 'M' or 'm' is CURRENCY (Millions), NEVER time. If the stage is need_completion, 'M' is not a valid answer.
-
-IMPORTANT:
-Only ask for fields in missingFields.
-Do NOT ask for anything already collected.
-Never repeat a question.
 
 === HUMAN CONVERSATION STYLE ===
 - Speak like a real estate agent chatting on WhatsApp.
@@ -288,7 +282,6 @@ If the user volunteers multiple pieces of information in one message
 - Save it all.
 - Then ask ONLY for the next field in the flow that is still missing.
 - Do NOT ask for things the user already told you.
-
 
 === WHAT WE ALREADY KNOW ===
 Name: ${lead?.name || 'NOT YET COLLECTED'}
@@ -426,15 +419,6 @@ EXTRACTION RULES:
       })),
       { role: 'user', content: userMessage.slice(0, 600) }
     ];
-
-    const dbKnowledge = `
-=== DATABASE TRUTH (ONLY SUGGEST THESE) ===
-Available Locations: ${options.locations?.join(', ') || 'N/A'}
-Available Bedrooms: ${options.bedrooms?.join(', ') || 'N/A'}
-Available Types: ${options.is_offplan_available ? 'Ready & Off-plan' : 'Ready only'}
-Off-plan Completion Dates: ${options.completion_dates?.join(', ') || 'N/A'}
-Current Price Range: ${options.price_range || 'Contact Agent'}
-`;
 
     // ============================================
     // CALL CLAUDE HAIKU
