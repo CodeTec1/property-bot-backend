@@ -1335,6 +1335,303 @@ router.post('/', async (req, res) => {
       return;
     }
 
+    // -----------------------------------------------
+    // ACTION: fetch_offplan_status
+    // -----------------------------------------------
+    if (result.action === 'fetch_offplan_status' && lead) {
+      await supabase
+        .from('leads')
+        .update({
+          location: result.location,
+          name: result.updateFields?.Name || lead.name,
+          conversation_stage: 'fetching_offplan'
+        })
+        .eq('id', lead.id);
+
+      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+      const normalizedInterest = normalize(result.interest || lead.interest);
+      const normalizedLocation = normalize(result.location);
+
+      const { data: propData } = await supabase
+        .from('properties')
+        .select('is_offplan')
+        .eq('tenant_id', tenant.id)
+        .ilike('type', normalizedInterest)
+        .ilike('location', normalizedLocation)
+        .eq('available', true);
+
+      if (propData && propData.length > 0) {
+        const hasOffplan = propData.some(p => p.is_offplan === true);
+        const hasReady = propData.some(p => p.is_offplan === false);
+
+        await supabase
+          .from('leads')
+          .update({ conversation_stage: 'asked_offplan' })
+          .eq('id', lead.id);
+
+        if (hasOffplan && hasReady) {
+          await sendMessage(
+            tenantWhatsApp, from,
+            `Are you looking for a ready property or an off-plan development?\n\n` +
+            `1 - Ready (move in immediately)\n` +
+            `2 - Off-Plan (under construction)`
+          );
+        } else if (hasOffplan && !hasReady) {
+          // Only offplan available - auto-select
+          await supabase
+            .from('leads')
+            .update({ is_offplan: true, conversation_stage: 'fetching_completion' })
+            .eq('id', lead.id);
+
+          // Fetch completion dates
+          const { data: dateData } = await supabase
+            .from('properties')
+            .select('completion_date')
+            .eq('tenant_id', tenant.id)
+            .ilike('type', normalizedInterest)
+            .ilike('location', normalizedLocation)
+            .eq('is_offplan', true)
+            .eq('available', true)
+            .not('completion_date', 'is', null);
+
+          const dates = [...new Set(dateData?.map(r => r.completion_date).filter(Boolean) || [])].sort();
+          const formatted = dates.map((d, i) => `${i + 1} - ${d}`).join('\n');
+
+          await supabase
+            .from('leads')
+            .update({ conversation_stage: 'asked_completion' })
+            .eq('id', lead.id);
+
+          await sendMessage(
+            tenantWhatsApp, from,
+            `We only have off-plan properties in ${result.location} right now.\n\n` +
+            `When would you like it completed?\n\n${formatted}\n\nJust type the date or number.`
+          );
+        } else {
+          // Only ready available - auto-select
+          await supabase
+            .from('leads')
+            .update({ is_offplan: false, conversation_stage: 'fetching_sizes' })
+            .eq('id', lead.id);
+
+          // Go straight to sizes
+          const { data: sizeData } = await supabase
+            .from('properties')
+            .select('bedrooms, plot_size')
+            .eq('tenant_id', tenant.id)
+            .ilike('type', normalizedInterest)
+            .ilike('location', normalizedLocation)
+            .eq('is_offplan', false)
+            .eq('available', true);
+
+          if (sizeData && sizeData.length > 0) {
+            const beds = [...new Set(sizeData.map(r => parseInt(r.bedrooms)).filter(n => !isNaN(n)))].sort((a, b) => a - b);
+            const options = beds.map(b => b === 0 ? `• Studio` : `• ${b} Bedroom${b > 1 ? 's' : ''}`).join('\n');
+
+            await supabase.from('leads').update({ conversation_stage: 'asked_size' }).eq('id', lead.id);
+
+            await sendMessage(
+              tenantWhatsApp, from,
+              `We have ready properties in ${result.location}.\n\n` +
+              `How many bedrooms are you looking for?\n\n${options}\n\nJust type the number.`
+            );
+          }
+        }
+      } else {
+        await sendMessage(tenantWhatsApp, from, `Sorry, we don't have properties in ${result.location} right now.\n\nReply HI to try another area.`);
+      }
+      return;
+    }
+
+    // -----------------------------------------------
+    // ACTION: fetch_completion_dates
+    // -----------------------------------------------
+    if (result.action === 'fetch_completion_dates' && lead) {
+      await supabase
+        .from('leads')
+        .update({
+          is_offplan: true,
+          conversation_stage: 'fetching_completion'
+        })
+        .eq('id', lead.id);
+
+      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+      const normalizedInterest = normalize(lead.interest);
+      const normalizedLocation = normalize(lead.location);
+
+      const { data: dateData } = await supabase
+        .from('properties')
+        .select('completion_date')
+        .eq('tenant_id', tenant.id)
+        .ilike('type', normalizedInterest)
+        .ilike('location', normalizedLocation)
+        .eq('is_offplan', true)
+        .eq('available', true)
+        .not('completion_date', 'is', null);
+
+      if (dateData && dateData.length > 0) {
+        const dates = [...new Set(dateData.map(r => r.completion_date).filter(Boolean))].sort();
+        const formatted = dates.map((d, i) => `${i + 1} - ${d}`).join('\n');
+
+        await supabase.from('leads').update({ conversation_stage: 'asked_completion' }).eq('id', lead.id);
+
+        await sendMessage(
+          tenantWhatsApp, from,
+          `When would you like it completed?\n\nAvailable completion dates:\n\n${formatted}\n\nJust type the date or the number.`
+        );
+      } else {
+        await sendMessage(tenantWhatsApp, from, `Sorry, no off-plan dates available right now.\n\nReply HI to start over.`);
+      }
+      return;
+    }
+
+    // -----------------------------------------------
+    // ACTION: fetch_budget_ranges
+    // -----------------------------------------------
+    if (result.action === 'fetch_budget_ranges' && lead) {
+      await supabase
+        .from('leads')
+        .update({
+          size: result.updateFields?.Size,
+          conversation_stage: 'fetching_budget_ranges'
+        })
+        .eq('id', lead.id);
+
+      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+      const normalizedInterest = normalize(lead.interest);
+      const normalizedLocation = normalize(lead.location);
+
+      let priceQuery = supabase
+        .from('properties')
+        .select('price')
+        .eq('tenant_id', tenant.id)
+        .ilike('type', normalizedInterest)
+        .ilike('location', normalizedLocation)
+        .eq('available', true)
+        .not('price', 'is', null);
+
+      if (lead.is_offplan === true) priceQuery = priceQuery.eq('is_offplan', true);
+      if (lead.is_offplan === false) priceQuery = priceQuery.eq('is_offplan', false);
+
+      // Filter by bedrooms if known
+      const size = result.updateFields?.Size || lead.size;
+      if (size) {
+        const isStudio = size.toLowerCase().includes('studio');
+        const bedroomNum = isStudio ? 0 : parseInt(size.match(/\d+/)?.[0]);
+        if (!isNaN(bedroomNum)) priceQuery = priceQuery.eq('bedrooms', bedroomNum);
+      }
+
+      const { data: priceData } = await priceQuery;
+
+      if (priceData && priceData.length > 0) {
+        const prices = priceData.map(r => r.price).filter(p => p > 0).sort((a, b) => a - b);
+        const minPrice = prices[0];
+        const maxPrice = prices[prices.length - 1];
+        const priceRange = `KES ${Number(minPrice).toLocaleString()} to KES ${Number(maxPrice).toLocaleString()}`;
+
+        await supabase.from('leads').update({ conversation_stage: 'asked_budget' }).eq('id', lead.id);
+
+        await sendMessage(
+          tenantWhatsApp, from,
+          `Almost there! 💰\n\n` +
+          `What is your budget?\n\n` +
+          `Properties matching your criteria are priced from:\n*${priceRange}*\n\n` +
+          `Just type your budget (e.g. 10M, 15M, KES 10,000,000)`
+        );
+      } else {
+        await sendMessage(
+          tenantWhatsApp, from,
+          `Sorry, no properties found matching your criteria.\n\n` +
+          `Our agent will contact you shortly:\n` +
+          `👤 ${agentName}\n📞 ${agentPhone || 'N/A'}\n\n` +
+          `Reply HI to start a new search.`
+        );
+
+        if (agentPhone) {
+          await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.NO_PROPERTY_FOUND, {
+            "1": lead.name || 'Unknown',
+            "2": cleanLeadPhone,
+            "3": kenyaTime
+          });
+        }
+      }
+      return;
+    }
+
+    // -----------------------------------------------
+    // ACTION: create_booking
+    // -----------------------------------------------
+    if (result.action === 'create_booking' && lead) {
+      const { data: freshLead } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('id', lead.id)
+        .single();
+
+      const propertyId = freshLead?.selected_property_id;
+      const slotMap = freshLead?.available_slots || '{}';
+
+      if (!propertyId) {
+        await sendMessage(tenantWhatsApp, from, `Sorry, could not find the property details.\n\nReply HI to start over.`);
+        return;
+      }
+
+      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+      const bookingResponse = await fetch(`${process.env.BACKEND_URL}/api/create-booking`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: tenant.id,
+          leadId: lead.id,
+          propertyId: propertyId,
+          slotNumber: result.selectedTime.toString(),
+          slotMap: slotMap,
+          leadName: freshLead?.name || 'Client',
+          leadPhone: from
+        })
+      });
+      const bookingData = await bookingResponse.json();
+
+      if (bookingData.success) {
+        await supabase.from('leads').update({ conversation_stage: 'booking_confirmed' }).eq('id', lead.id);
+        await sendMessage(tenantWhatsApp, from, bookingData.message);
+
+        if (agentPhone) {
+          await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.BOOKING_CONFIRMED, {
+            "1": freshLead?.name || 'Unknown',
+            "2": cleanLeadPhone,
+            "3": bookingData.slotDetails?.property || 'N/A',
+            "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
+            "5": `KES ${freshLead?.budget || 'N/A'}`,
+            "6": freshLead?.location || 'N/A',
+            "7": bookingData.slotDetails?.date || 'N/A',
+            "8": bookingData.slotDetails?.time || 'N/A'
+          });
+        }
+      } else if (bookingData.slotTaken) {
+        const newSlotsResponse = await fetch(`${process.env.BACKEND_URL}/api/available-slots-v2`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tenantId: tenant.id, propertyId: propertyId, leadId: lead.id })
+        });
+        const newSlotsData = await newSlotsResponse.json();
+
+        await supabase
+          .from('leads')
+          .update({ conversation_stage: 'awaiting_time_slot', available_slots: newSlotsData.slotMap })
+          .eq('id', lead.id);
+
+        await sendMessage(tenantWhatsApp, from, `Sorry, that slot was just taken.\n\nHere are the next available times:\n\n${newSlotsData.message}`);
+      } else {
+        await sendMessage(tenantWhatsApp, from, `Sorry, something went wrong.\n\nAgent: ${agentName}\nPhone: ${agentPhone || 'N/A'}`);
+      }
+      return;
+    }
+    
     // ACTION: booking
     if (aiResult.action === 'booking') {
       let propertyNumber = aiResult.extracted?.property_number;
