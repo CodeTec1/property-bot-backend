@@ -12,13 +12,6 @@ const twilioClient = twilio(
 );
 
 // ============================================
-// BACKEND URL — hardcoded fallback prevents
-// "undefined/api/..." crash if env var missing
-// Add BACKEND_URL to Render environment variables
-// ============================================
-const BACKEND_URL = process.env.BACKEND_URL || 'https://property-bot-backend.onrender.com';
-
-// ============================================
 // Twilio Template SIDs
 // ============================================
 const TEMPLATES = {
@@ -81,13 +74,22 @@ function createBudgetRanges(minPrice, maxPrice) {
   for (let i = 0; i < 4; i++) {
     const rangeMin = Math.floor((minPrice + (step * i)) / 1000000) * 1000000;
     const rangeMax = Math.ceil((minPrice + (step * (i + 1))) / 1000000) * 1000000;
+
     if (rangeMin !== rangeMax) {
-      ranges[rangeCount.toString()] = { min: rangeMin, max: rangeMax };
+      ranges[rangeCount.toString()] = {
+        min: rangeMin,
+        max: rangeMax
+      };
       rangeCount++;
     }
   }
 
-  ranges[rangeCount.toString()] = { min: 0, max: 999999999999, label: 'Any budget' };
+  ranges[rangeCount.toString()] = {
+    min: 0,
+    max: 999999999999,
+    label: 'Any budget'
+  };
+
   return ranges;
 }
 
@@ -165,7 +167,10 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
     const normalizedLocation = normalize(location);
 
     console.log('Searching properties:', {
-      tenantId, normalizedInterest, normalizedLocation, size, isOffplan, completionRange
+      tenantId,
+      normalizedInterest,
+      normalizedLocation,
+      size
     });
 
     let budgetNumber = null;
@@ -191,6 +196,7 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
 
     if (isOffplan === true) {
       query = query.eq('is_offplan', true);
+
       if (completionRange && completionRange !== 'any') {
         if (completionRange === '2026') {
           query = query.ilike('completion_date', '%2026%');
@@ -204,7 +210,7 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
             .not('completion_date', 'ilike', '%2027%')
             .not('completion_date', 'ilike', '%2028%');
         } else {
-          // Exact string match e.g. "Dec-2027", "January 2027"
+          // Exact string match for specific dates like "Dec-2027"
           query = query.ilike('completion_date', `%${completionRange}%`);
         }
       }
@@ -218,13 +224,19 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
         query = query.ilike('plot_size', `%${cleanPlotSize}%`);
       }
     } else {
-      const bedroomNumber = extractBedrooms(size);
-      console.log('Extracted bedroom number:', bedroomNumber);
-      if (bedroomNumber !== null && bedroomNumber !== undefined) {
-        query = query.eq('bedrooms', bedroomNumber);
-        console.log('Filtering by bedrooms:', bedroomNumber);
-      }
+    // USE lead.bedrooms (the integer) instead of parsing the 'size' string again
+    const bedroomFilter = lead?.bedrooms !== undefined ? lead.bedrooms : extractBedrooms(size);
+    
+    if (bedroomFilter !== null && bedroomFilter !== undefined) {
+        query = query.eq('bedrooms', bedroomFilter);
+        console.log('STRICT FILTER: Only showing', bedroomFilter, 'bedrooms');
+    } else {
+        // CRITICAL: If the user hasn't picked a bedroom count yet, 
+        // don't just return anything—wait for the filter!
+        console.log('No bedroom filter found, search aborted to prevent wrong results');
+        return []; 
     }
+}
 
     const { data, error } = await query;
     if (error) {
@@ -247,7 +259,10 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
 function formatKenyaDate(isoString) {
   const date = new Date(isoString);
   return date.toLocaleDateString('en-KE', {
-    timeZone: 'Africa/Nairobi', year: 'numeric', month: 'numeric', day: 'numeric'
+    timeZone: 'Africa/Nairobi',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
   });
 }
 
@@ -257,12 +272,15 @@ function formatKenyaDate(isoString) {
 function formatKenyaTime(isoString) {
   const date = new Date(isoString);
   return date.toLocaleTimeString('en-KE', {
-    timeZone: 'Africa/Nairobi', hour: 'numeric', minute: '2-digit', hour12: true
+    timeZone: 'Africa/Nairobi',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
   });
 }
 
 // ============================================
-// Helper: Send property cards to user
+// Helper: Handle property search results
 // ============================================
 async function handlePropertyResults(
   properties, lead, tenant, tenantWhatsApp,
@@ -270,16 +288,26 @@ async function handlePropertyResults(
 ) {
   if (properties.length > 0) {
     const searchResultsToSave = properties.map((p, i) => ({
-      number: i + 1, id: p.id, name: p.property_name, price: p.price,
-      location: p.location, address: p.address, bedrooms: p.bedrooms,
-      plot_size: p.plot_size, type: p.type, photo_url: p.photo_url
+      number: i + 1,
+      id: p.id,
+      name: p.property_name,
+      price: p.price,
+      location: p.location,
+      address: p.address,
+      bedrooms: p.bedrooms,
+      plot_size: p.plot_size,
+      type: p.type,
+      photo_url: p.photo_url
     }));
 
-    await supabase.from('leads').update({
-      search_results: searchResultsToSave,
-      conversation_stage: 'completed',
-      status: 'Contacted'
-    }).eq('id', lead.id);
+    await supabase
+      .from('leads')
+      .update({
+        search_results: searchResultsToSave,
+        conversation_stage: 'completed',
+        status: 'Contacted'
+      })
+      .eq('id', lead.id);
 
     for (let i = 0; i < properties.length; i++) {
       const property = properties[i];
@@ -293,7 +321,8 @@ async function handlePropertyResults(
       const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
 
       const propertyHeader =
-        `🏢 *PROPERTY ${i + 1}*\n──────────\n\n` +
+        `🏢 *PROPERTY ${i + 1}*\n` +
+        `──────────\n\n` +
         (property.project_name ? `*${property.project_name}*\n` : '') +
         `*${property.property_name}*\n\n` +
         `📍 ${property.location}\n` +
@@ -335,23 +364,33 @@ async function handlePropertyResults(
 
     await delay(1500);
     await sendMessage(
-      tenantWhatsApp, from,
+      tenantWhatsApp,
+      from,
       `Found ${properties.length} propert${properties.length > 1 ? 'ies' : 'y'} for you! 🏡\n\n` +
       `Reply *Property1*${properties.length > 1 ? `, *Property2*` : ''} etc. to book a viewing.`
     );
 
   } else {
     await sendMessage(
-      tenantWhatsApp, from,
+      tenantWhatsApp,
+      from,
       `Sorry, I could not find properties matching your exact criteria.\n\n` +
       `Our agent will contact you personally:\n` +
-      `👤 ${agentName || 'Agent'}\n📞 ${agentPhone || 'N/A'}\n\n` +
+      `👤 ${agentName || 'Agent'}\n` +
+      `📞 ${agentPhone || 'N/A'}\n\n` +
       `Reply *HI* to start a new search.`
     );
 
     if (agentPhone) {
-      await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.NO_PROPERTY_FOUND,
-        { "1": lead.name || 'Unknown', "2": cleanLeadPhone, "3": kenyaTime }
+      await sendTemplateToAgent(
+        tenantWhatsApp,
+        agentPhone,
+        TEMPLATES.NO_PROPERTY_FOUND,
+        {
+          "1": lead.name || 'Unknown',
+          "2": cleanLeadPhone,
+          "3": kenyaTime
+        }
       );
     }
   }
@@ -367,9 +406,11 @@ router.post('/', async (req, res) => {
 
   console.log(`Message from ${from} to ${to}: ${message}`);
 
+  // Respond to Twilio immediately to prevent timeout
   res.status(200).send('<Response></Response>');
 
   try {
+    // Look up tenant and lead
     const { tenant, lead } = await getTenantAndLead(to, from);
 
     if (!tenant) {
@@ -379,6 +420,7 @@ router.post('/', async (req, res) => {
 
     const tenantWhatsApp = tenant.whatsapp_number;
 
+    // Get agent details
     const { data: agentData } = await supabase
       .from('agents')
       .select('agent_name, phone, email')
@@ -392,39 +434,87 @@ router.post('/', async (req, res) => {
       ? lead.phone.replace('whatsapp:', '').trim()
       : from.replace('whatsapp:', '').trim();
 
+    // Get current Kenya time for templates
     const now = new Date();
     const kenyaTime = now.toLocaleTimeString('en-KE', {
-      timeZone: 'Africa/Nairobi', hour: 'numeric', minute: '2-digit', hour12: true
+      timeZone: 'Africa/Nairobi',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
     });
 
+    // ============================================
+    // PRE-PROCESS SIMPLE RESPONSES BEFORE AI
+    // This saves cost and improves accuracy
+    // ============================================
+    let preExtracted = {};
     const msgLower = message.toLowerCase().trim();
 
     // ============================================
-    // STEP 1: CANCELLATION (exact command)
+    // Detect completion date from DATABASE (DYNAMIC)
     // ============================================
+    if (!preExtracted.completion_range && lead?.interest && lead?.location) {
+
+      const { data: propData } = await supabase
+        .from('properties')
+        .select('completion_date')
+        .eq('tenant_id', tenant.id)
+        .eq('available', true)
+        .ilike('type', lead.interest)
+        .ilike('location', lead.location);
+
+      if (propData && propData.length > 0) {
+        const availableDates = [
+          ...new Set(propData.map(p => p.completion_date).filter(Boolean))
+        ];
+
+        const userMsg = message.toLowerCase();
+
+        const matchedDate = availableDates.find(date =>
+          userMsg.includes(date.toLowerCase())
+        );
+
+        if (matchedDate) {
+          preExtracted.completion_range = matchedDate;
+        }
+      }
+    }
+
+    // Detect cancellation
     if (msgLower === 'cancel' && lead?.conversation_stage === 'booking_confirmed') {
-      const cancelResponse = await fetch(`${BACKEND_URL}/api/cancel-booking`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id, calendarId: tenant.google_calendar_id })
-      });
+      const cancelResponse = await fetch(
+        `${process.env.BACKEND_URL}/api/cancel-booking`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leadId: lead.id,
+            calendarId: tenant.google_calendar_id
+          })
+        }
+      );
       const cancelData = await cancelResponse.json();
-      await supabase.from('leads').update({ conversation_stage: 'booking_cancelled' }).eq('id', lead.id);
+
+      await supabase
+        .from('leads')
+        .update({ conversation_stage: 'booking_cancelled' })
+        .eq('id', lead.id);
+
       await sendMessage(tenantWhatsApp, from, cancelData.userMessage);
+
       if (agentPhone) {
-        await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.BOOKING_CANCELLED,
+        await sendTemplateToAgent(
+          tenantWhatsApp,
+          agentPhone,
+          TEMPLATES.BOOKING_CANCELLED,
           { "1": lead.name || 'Unknown', "2": cleanLeadPhone }
         );
       }
       return;
     }
 
-    // ============================================
-    // STEP 2: PROPERTY SELECTION
-    // "Property1", "property 2", or bare digit after search completed
-    // ============================================
-    const propertySelectMatch =
-      msgLower.match(/^property\s*(\d+)$/i) ||
+    // Detect property selection
+    const propertySelectMatch = msgLower.match(/^property\s*(\d+)$/i) ||
       (lead?.conversation_stage === 'completed' && msgLower.match(/^(\d+)$/));
 
     if (propertySelectMatch) {
@@ -433,7 +523,11 @@ router.post('/', async (req, res) => {
 
       let searchResults = lead?.search_results || [];
       if (!searchResults || searchResults.length === 0) {
-        const { data: freshLead } = await supabase.from('leads').select('search_results').eq('id', lead.id).single();
+        const { data: freshLead } = await supabase
+          .from('leads')
+          .select('search_results')
+          .eq('id', lead.id)
+          .single();
         searchResults = freshLead?.search_results || [];
       }
 
@@ -442,34 +536,47 @@ router.post('/', async (req, res) => {
       if (selectedProperty) {
         console.log('Found property:', selectedProperty.name);
 
-        await supabase.from('leads').update({
-          selected_property_number: propNum,
-          selected_property_id: selectedProperty.id,
-          last_viewed_property: selectedProperty.name,
-          conversation_stage: 'awaiting_time_slot'
-        }).eq('id', lead.id);
+        await supabase
+          .from('leads')
+          .update({
+            selected_property_number: propNum,
+            selected_property_id: selectedProperty.id,
+            last_viewed_property: selectedProperty.name,
+            conversation_stage: 'awaiting_time_slot'
+          })
+          .eq('id', lead.id);
 
-        await sendMessage(tenantWhatsApp, from,
+        await sendMessage(
+          tenantWhatsApp,
+          from,
           `Great choice! 🎉 Let me check availability for *${selectedProperty.name}*...`
         );
 
-        const slotsResponse = await fetch(`${BACKEND_URL}/api/available-slots-v2`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tenantId: tenant.id, propertyId: selectedProperty.id, leadId: lead.id })
-        });
+        const slotsResponse = await fetch(
+          `${process.env.BACKEND_URL}/api/available-slots-v2`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tenantId: tenant.id,
+              propertyId: selectedProperty.id,
+              leadId: lead.id
+            })
+          }
+        );
         const slotsData = await slotsResponse.json();
 
-        await supabase.from('leads').update({ available_slots: slotsData.slotMap }).eq('id', lead.id);
+        await supabase
+          .from('leads')
+          .update({ available_slots: slotsData.slotMap })
+          .eq('id', lead.id);
+
         await sendMessage(tenantWhatsApp, from, slotsData.message);
         return;
       }
     }
 
-    // ============================================
-    // STEP 3: SLOT SELECTION
-    // Only fires when awaiting_time_slot
-    // ============================================
+    // Detect slot selection
     const slotSelectMatch = lead?.conversation_stage === 'awaiting_time_slot' &&
       (msgLower.match(/^slot\s*(\d+)$/i) || msgLower.match(/^(\d+)$/));
 
@@ -477,109 +584,183 @@ router.post('/', async (req, res) => {
       const slotNum = parseInt(slotSelectMatch[1]);
       console.log('Slot selection detected:', slotNum);
 
-      const { data: freshLead } = await supabase.from('leads').select('*').eq('id', lead.id).single();
+      const { data: freshLead } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('id', lead.id)
+        .single();
+
       const propertyId = freshLead?.selected_property_id;
       const slotMap = freshLead?.available_slots || '{}';
 
       if (!propertyId) {
-        await sendMessage(tenantWhatsApp, from, `Sorry, I lost track of which property you selected.\n\nReply *HI* to start over.`);
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Sorry, I lost track of which property you selected.\n\nReply *HI* to start over.`
+        );
         return;
       }
 
       await sendMessage(tenantWhatsApp, from, `Creating your booking... ✅`);
 
-      const bookingResponse = await fetch(`${BACKEND_URL}/api/create-booking`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tenantId: tenant.id, leadId: lead.id, propertyId,
-          slotNumber: slotNum.toString(), slotMap,
-          leadName: freshLead?.name || 'Client', leadPhone: from
-        })
-      });
+      const bookingResponse = await fetch(
+        `${process.env.BACKEND_URL}/api/create-booking`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tenantId: tenant.id,
+            leadId: lead.id,
+            propertyId: propertyId,
+            slotNumber: slotNum.toString(),
+            slotMap: slotMap,
+            leadName: freshLead?.name || 'Client',
+            leadPhone: from
+          })
+        }
+      );
       const bookingData = await bookingResponse.json();
 
       if (bookingData.success) {
-        await supabase.from('leads').update({ conversation_stage: 'booking_confirmed' }).eq('id', lead.id);
+        await supabase
+          .from('leads')
+          .update({ conversation_stage: 'booking_confirmed' })
+          .eq('id', lead.id);
+
         await sendMessage(tenantWhatsApp, from, bookingData.message);
+
         if (agentPhone) {
-          await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.BOOKING_CONFIRMED, {
-            "1": freshLead?.name || 'Unknown',
-            "2": cleanLeadPhone,
-            "3": bookingData.slotDetails?.property || 'N/A',
-            "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
-            "5": `KES ${freshLead?.budget || 'N/A'}`,
-            "6": freshLead?.location || 'N/A',
-            "7": bookingData.slotDetails?.date || 'N/A',
-            "8": bookingData.slotDetails?.time || 'N/A'
-          });
+          await sendTemplateToAgent(
+            tenantWhatsApp,
+            agentPhone,
+            TEMPLATES.BOOKING_CONFIRMED,
+            {
+              "1": freshLead?.name || 'Unknown',
+              "2": cleanLeadPhone,
+              "3": bookingData.slotDetails?.property || 'N/A',
+              "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
+              "5": `KES ${freshLead?.budget || 'N/A'}`,
+              "6": freshLead?.location || 'N/A',
+              "7": bookingData.slotDetails?.date || 'N/A',
+              "8": bookingData.slotDetails?.time || 'N/A'
+            }
+          );
         }
+
       } else if (bookingData.slotTaken) {
-        const newSlotsResponse = await fetch(`${BACKEND_URL}/api/available-slots-v2`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tenantId: tenant.id, propertyId, leadId: lead.id })
-        });
+        const newSlotsResponse = await fetch(
+          `${process.env.BACKEND_URL}/api/available-slots-v2`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tenantId: tenant.id,
+              propertyId: propertyId,
+              leadId: lead.id
+            })
+          }
+        );
         const newSlotsData = await newSlotsResponse.json();
-        await supabase.from('leads').update({
-          conversation_stage: 'awaiting_time_slot',
-          available_slots: newSlotsData.slotMap
-        }).eq('id', lead.id);
-        await sendMessage(tenantWhatsApp, from,
+
+        await supabase
+          .from('leads')
+          .update({
+            conversation_stage: 'awaiting_time_slot',
+            available_slots: newSlotsData.slotMap
+          })
+          .eq('id', lead.id);
+
+        await sendMessage(
+          tenantWhatsApp,
+          from,
           `Sorry, that slot was just taken.\n\nHere are the next available times:\n\n${newSlotsData.message}`
         );
       } else {
-        await sendMessage(tenantWhatsApp, from,
-          `Sorry, something went wrong with your booking.\n\nOur agent will contact you shortly.\n\nAgent: ${agentName}\nPhone: ${agentPhone || 'N/A'}`
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Sorry, something went wrong with your booking.\n\n` +
+          `Our agent will contact you shortly.\n\n` +
+          `Agent: ${agentName}\nPhone: ${agentPhone || 'N/A'}`
         );
       }
       return;
     }
 
-    // ============================================
-    // STEP 4: PRE-EXTRACTION
-    // Extract clear simple answers without AI
-    // CRITICAL RULE: Only extract fields NOT yet saved
-    // Never overwrite what is already in the DB
-    // ============================================
-    let preExtracted = {};
+    // Detect yes/no for restart
+    if (lead && ['new', 'new search', 'start over', 'restart'].includes(msgLower)) {
+      preExtracted.restart = true;
+    }
 
-    // Interest — only if not yet set
-    if (!lead?.interest) {
-      if (['buy', 'buying', 'purchase', 'i want to buy', "i'm looking to buy"].includes(msgLower) ||
-          msgLower.includes('looking to buy') || msgLower.includes('want to buy')) {
-        preExtracted.interest = 'Buy';
-      } else if (['rent', 'renting', 'rental', 'i want to rent', "i'm looking to rent"].includes(msgLower) ||
-          msgLower.includes('looking to rent') || msgLower.includes('want to rent')) {
-        preExtracted.interest = 'Rent';
-      } else if (['land', 'i want land', 'plot'].includes(msgLower)) {
-        preExtracted.interest = 'Land';
+    // Detect property type
+    if (['buy', 'buying', 'purchase', 'i want to buy', "i'm looking to buy"].includes(msgLower) ||
+        msgLower.includes('looking to buy') || msgLower.includes('want to buy')) {
+      preExtracted.interest = 'Buy';
+    }
+    if (['rent', 'renting', 'rental', 'i want to rent', "i'm looking to rent"].includes(msgLower) ||
+        msgLower.includes('looking to rent') || msgLower.includes('want to rent')) {
+      preExtracted.interest = 'Rent';
+    }
+    if (['land', 'i want land', 'plot'].includes(msgLower)) {
+      preExtracted.interest = 'Land';
+    }
+
+    // Detect off-plan preference
+    // CHANGE: Only detect off-plan when we are NOT in awaiting_time_slot or booking stages
+    // to avoid bare digit "1" colliding with slot/property selection
+    const safeStageForOffplan = !['awaiting_time_slot', 'completed', 'booking_confirmed'].includes(
+      lead?.conversation_stage
+    );
+
+    if (safeStageForOffplan) {
+      if (['offplan', 'off-plan', 'off plan', 'under construction', 'yes offplan'].includes(msgLower) ||
+          msgLower.includes('off plan') || msgLower.includes('off-plan') || msgLower.includes('offplan')) {
+        preExtracted.is_offplan = true;
+      }
+      if (['ready', 'ready to move', 'move in', 'completed', 'ready property'].includes(msgLower) ||
+          msgLower.includes('ready to move') || msgLower.includes('move in')) {
+        preExtracted.is_offplan = false;
+      }
+
+      // CHANGE: Only treat bare "1"/"2" as offplan selector when stage is explicitly need_offplan
+      // This prevents collision with bedroom selection and slot selection
+      if (lead?.conversation_stage === 'need_offplan' || !lead?.is_offplan && !lead?.size) {
+        if (msgLower === '2') preExtracted.is_offplan = true;   // 2 = off-plan option
+        if (msgLower === '1') preExtracted.is_offplan = false;  // 1 = ready option
       }
     }
 
-    // Bedrooms — only if size not yet set
-    if (!lead?.size) {
-      // Match "3 bed", "3 bedroom", "3 bedrooms"
-      const bedroomWordMatch = msgLower.match(/(\d+)\s*bed(?:room)?s?/i) || msgLower.match(/^studio$/i);
-      if (bedroomWordMatch) {
+    // Detect bedroom numbers
+    // CHANGE: Only extract bedrooms when size is not yet set, never during slot/property selection
+    const safeStageForBedrooms = !['awaiting_time_slot', 'booking_confirmed'].includes(
+      lead?.conversation_stage
+    ) && !lead?.size;
+
+    if (safeStageForBedrooms) {
+      const bedroomMatch = msgLower.match(/(\d+)\s*bed/) ||
+        msgLower.match(/(\d+)\s*bedroom/) ||
+        msgLower.match(/^studio$/i);
+
+      if (bedroomMatch) {
         if (msgLower === 'studio') {
           preExtracted.bedrooms = 0;
           preExtracted.size = 'Studio';
         } else {
-          const num = parseInt(bedroomWordMatch[1]);
+          const num = parseInt(bedroomMatch[1]);
           if (num >= 0 && num <= 10) {
             preExtracted.bedrooms = num;
-            preExtracted.size = `${num} bedroom`;
+            preExtracted.size = num === 0 ? 'Studio' : `${num} bedroom`;
           }
         }
       }
 
-      // Bare digit for bedrooms ONLY when offplan is already known
-      // At that point we know the user is answering the bedroom question
-      if (!bedroomWordMatch && (lead?.is_offplan === true || lead?.is_offplan === false)) {
-        const bareDigit = msgLower.match(/^(\d+)$/);
-        if (bareDigit) {
-          const num = parseInt(bareDigit[1]);
+      // CHANGE: bare digit for bedrooms ONLY when we know offplan is already set
+      // and we are specifically in need_size stage — prevents collision
+      if (!bedroomMatch && lead?.is_offplan !== null && lead?.is_offplan !== undefined) {
+        const bareDigitMatch = msgLower.match(/^(\d+)$/);
+        if (bareDigitMatch) {
+          const num = parseInt(bareDigitMatch[1]);
           if (num >= 0 && num <= 10) {
             preExtracted.bedrooms = num;
             preExtracted.size = num === 0 ? 'Studio' : `${num} bedroom`;
@@ -588,80 +769,44 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Off-plan — only if not yet set, only in safe stages
-    if (lead?.is_offplan === null || lead?.is_offplan === undefined) {
-      const safeForOffplan = !['awaiting_time_slot', 'completed', 'booking_confirmed'].includes(lead?.conversation_stage);
-      if (safeForOffplan) {
-        if (['offplan', 'off-plan', 'off plan', 'under construction', 'yes offplan'].includes(msgLower) ||
-            msgLower.includes('off plan') || msgLower.includes('off-plan') || msgLower.includes('offplan')) {
-          preExtracted.is_offplan = true;
-        } else if (['ready', 'ready to move', 'move in', 'ready property'].includes(msgLower) ||
-            msgLower.includes('ready to move') || msgLower.includes('move in')) {
-          preExtracted.is_offplan = false;
-        }
+    // Detect budget — CHANGE: reordered so KES+M patterns checked first
+    const budgetPatterns = [
+      { pattern: /kes\s*(\d+\.?\d*)\s*m/i, multiplier: 1000000 },        // KES 10M / KES 10.5M
+      { pattern: /kes\s*(\d+\.?\d*)\s*million/i, multiplier: 1000000 },  // KES 10 million
+      { pattern: /kes\s*(\d+\.?\d*)\s*k/i, multiplier: 1000 },           // KES 500K
+      { pattern: /^(\d+\.?\d*)\s*m$/i, multiplier: 1000000 },            // 10M
+      { pattern: /^(\d+\.?\d*)\s*million/i, multiplier: 1000000 },       // 10 million
+      { pattern: /^(\d+\.?\d*)\s*k$/i, multiplier: 1000 },               // 500K
+      { pattern: /^kes\s*(\d+[\d,]*)/i, multiplier: 1 },                 // KES 10000000
+      { pattern: /^(\d+[\d,]+)$/, multiplier: 1 }                        // 10000000
+    ];
 
-        // Bare "1"=ready or "2"=offplan ONLY when we are on the offplan question
-        // We know it's the offplan question when: size is set but is_offplan is not
-        if (lead?.size && (lead?.is_offplan === null || lead?.is_offplan === undefined)) {
-          if (msgLower === '1') preExtracted.is_offplan = false;
-          if (msgLower === '2') preExtracted.is_offplan = true;
-        }
-      }
-    }
-
-    // Completion date — match against actual DB dates only, never guess
-    if (lead?.is_offplan === true && !lead?.completion_range && lead?.interest && lead?.location) {
-      const { data: dateProps } = await supabase
-        .from('properties')
-        .select('completion_date')
-        .eq('tenant_id', tenant.id)
-        .eq('available', true)
-        .ilike('type', lead.interest)
-        .ilike('location', lead.location)
-        .eq('is_offplan', true);
-
-      if (dateProps && dateProps.length > 0) {
-        const availableDates = [...new Set(dateProps.map(p => p.completion_date).filter(Boolean))];
-        const matchedDate = availableDates.find(date => msgLower.includes(date.toLowerCase()));
-        if (matchedDate) preExtracted.completion_range = matchedDate;
-      }
-    }
-
-    // Budget — ONLY when size AND offplan are already saved (budget is the last question)
-    // Minimum 100k sanity check prevents small numbers being mistaken for budgets
-    if (lead?.size && (lead?.is_offplan === true || lead?.is_offplan === false) && !lead?.budget) {
-      const budgetPatterns = [
-        { pattern: /kes\s*(\d+\.?\d*)\s*m/i, multiplier: 1000000 },
-        { pattern: /kes\s*(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
-        { pattern: /kes\s*(\d+\.?\d*)\s*k/i, multiplier: 1000 },
-        { pattern: /^(\d+\.?\d*)\s*m$/i, multiplier: 1000000 },
-        { pattern: /^(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
-        { pattern: /^(\d+\.?\d*)\s*k$/i, multiplier: 1000 },
-        { pattern: /^kes\s*(\d+[\d,]*)/i, multiplier: 1 },
-        { pattern: /^(\d[\d,]{5,})$/, multiplier: 1 }  // 6+ digit raw numbers only
-      ];
-
-      for (const { pattern, multiplier } of budgetPatterns) {
-        const match = msgLower.match(pattern);
-        if (match) {
-          const amount = parseFloat(match[1].replace(/,/g, '')) * multiplier;
-          if (!isNaN(amount) && amount >= 100000) {
-            preExtracted.budget = amount;
-            break;
-          }
+    for (const { pattern, multiplier } of budgetPatterns) {
+      const match = msgLower.match(pattern);
+      if (match) {
+        const amount = parseFloat(match[1].replace(/,/g, '')) * multiplier;
+        if (!isNaN(amount) && amount > 0) {
+          preExtracted.budget = amount;
+          break;
         }
       }
     }
 
-    // ============================================
-    // STEP 5: SAVE PRE-EXTRACTED — PATCH ONLY
-    // Only write the fields we just extracted
-    // Never touch fields already in the database
-    // ============================================
-    if (Object.keys(preExtracted).length > 0) {
-      console.log('Pre-extracted data:', preExtracted);
+    // If we have pre-extracted data, save it directly WITHOUT calling AI
+    if (Object.keys(preExtracted).length > 0 && !preExtracted.restart) {
+      console.log('Pre-extracted data (no AI needed):', preExtracted);
 
-      // Validate offplan against DB
+      const quickUpdate = {};
+
+      if (preExtracted.interest) quickUpdate.interest = preExtracted.interest;
+      if (preExtracted.location) quickUpdate.location = preExtracted.location;
+      if (preExtracted.is_offplan !== undefined) quickUpdate.is_offplan = preExtracted.is_offplan;
+      if (preExtracted.bedrooms !== undefined) quickUpdate.bedrooms = preExtracted.bedrooms;
+      if (preExtracted.size) quickUpdate.size = preExtracted.size;
+      if (preExtracted.budget) quickUpdate.budget = preExtracted.budget.toString();
+      if (preExtracted.completion_range) quickUpdate.completion_range = preExtracted.completion_range;
+
+      // Force valid offplan logic based on DB
       if (preExtracted.is_offplan !== undefined && lead?.interest && lead?.location) {
         const { data: propData } = await supabase
           .from('properties')
@@ -674,278 +819,391 @@ router.post('/', async (req, res) => {
         if (propData && propData.length > 0) {
           const hasOffplan = propData.some(p => p.is_offplan === true);
           const hasReady = propData.some(p => p.is_offplan === false);
-          if (preExtracted.is_offplan === true && !hasOffplan) preExtracted.is_offplan = false;
-          if (preExtracted.is_offplan === false && !hasReady) preExtracted.is_offplan = true;
+
+          if (preExtracted.is_offplan === true && !hasOffplan) {
+            quickUpdate.is_offplan = false;
+          }
+
+          if (preExtracted.is_offplan === false && !hasReady) {
+            quickUpdate.is_offplan = true;
+          }
         }
       }
 
-      // Build patch — only extracted fields
-      const patchUpdate = {};
-      if (preExtracted.interest !== undefined) patchUpdate.interest = preExtracted.interest;
-      if (preExtracted.bedrooms !== undefined) patchUpdate.bedrooms = preExtracted.bedrooms;
-      if (preExtracted.size !== undefined) patchUpdate.size = preExtracted.size;
-      if (preExtracted.is_offplan !== undefined) patchUpdate.is_offplan = preExtracted.is_offplan;
-      if (preExtracted.completion_range !== undefined) patchUpdate.completion_range = preExtracted.completion_range;
-      if (preExtracted.budget !== undefined) patchUpdate.budget = preExtracted.budget.toString();
+      // Update lead and get fresh data back in one round-trip (fixes race condition)
+      if (lead) {
+        const updatedHistory = [
+          ...(lead.conversation_history || []),
+          { role: 'user', content: message }
+        ].slice(-10);
 
-      if (lead && Object.keys(patchUpdate).length > 0) {
-        await supabase.from('leads').update(patchUpdate).eq('id', lead.id);
+        quickUpdate.conversation_history = updatedHistory;
+
+        // CHANGE: Use update().select() to get fresh lead in one DB call — no race condition
+        const { data: freshLead } = await supabase
+          .from('leads')
+          .update(quickUpdate)
+          .eq('id', lead.id)
+          .select('*')
+          .single();
+
+        console.log('Fresh lead after update:', {
+          interest: freshLead?.interest,
+          location: freshLead?.location,
+          size: freshLead?.size,
+          budget: freshLead?.budget,
+          is_offplan: freshLead?.is_offplan,
+          completion_range: freshLead?.completion_range
+        });
+
+        const isOffplanSet = freshLead?.is_offplan === true || freshLead?.is_offplan === false;
+
+        const completionReady = freshLead?.is_offplan === false ||
+          (freshLead?.is_offplan === true && freshLead?.completion_range);
+
+        // CHANGE: Flow order enforced here — must have size before offplan/completion
+        // Budget is always last — only checked after all other fields are set
+        const readyToSearch =
+          freshLead?.interest &&
+          freshLead?.location &&
+          freshLead?.size &&
+          isOffplanSet &&
+          completionReady &&
+          freshLead?.budget;
+
+        console.log('Ready to search:', readyToSearch, '| isOffplanSet:', isOffplanSet, '| completionReady:', completionReady);
+
+        if (readyToSearch) {
+          await sendMessage(
+            tenantWhatsApp,
+            from,
+            `✅ Got it! Let me find the best matches for you...\n\n` +
+            `📋 Your preferences:\n` +
+            `• Type: ${freshLead.interest}\n` +
+            `• Location: ${freshLead.location}\n` +
+            `• Size: ${freshLead.size}\n` +
+            `• Budget: KES ${Number(freshLead.budget).toLocaleString()}\n\n` +
+            `Searching properties... 🔍`
+          );
+
+          const properties = await searchProperties(
+            tenant.id,
+            freshLead.interest,
+            freshLead.location,
+            freshLead.size,
+            freshLead.budget,
+            freshLead.is_offplan,
+            freshLead.completion_range
+          );
+
+          await handlePropertyResults(
+            properties,
+            freshLead,
+            tenant,
+            tenantWhatsApp,
+            from,
+            agentName,
+            agentPhone,
+            cleanLeadPhone,
+            kenyaTime
+          );
+
+          return;
+        }
+
+        // Not ready yet — use AI to ask for next missing piece
+        // CHANGE: pass real message so AI has full context
+        const { data: latestLead } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('id', lead.id)
+          .single();
+
+        const aiResult = await processAIConversation({
+          userMessage: message,
+          lead: latestLead,
+          tenant: tenant,
+          conversationHistory: updatedHistory,
+          agentName: agentName,
+          agentPhone: agentPhone,
+          isNewLead: false
+        });
+
+        const finalHistory = [
+          ...updatedHistory,
+          { role: 'assistant', content: aiResult.message }
+        ].slice(-10);
+
+        await supabase
+          .from('leads')
+          .update({ conversation_history: finalHistory })
+          .eq('id', lead.id);
+
+        await sendMessage(tenantWhatsApp, from, aiResult.message);
+        return;
       }
     }
 
     // ============================================
-    // STEP 6: FETCH FRESH LEAD — single source of truth
+    // AI CONVERSATION ENGINE
     // ============================================
-    let currentLead = lead;
-    if (lead) {
-      const { data: refreshed } = await supabase.from('leads').select('*').eq('id', lead.id).single();
-      if (refreshed) currentLead = refreshed;
-    }
-
-    console.log('Current lead state:', {
-      interest: currentLead?.interest,
-      location: currentLead?.location,
-      size: currentLead?.size,
-      is_offplan: currentLead?.is_offplan,
-      completion_range: currentLead?.completion_range,
-      budget: currentLead?.budget
-    });
-
-    // ============================================
-    // STEP 7: CHECK IF READY TO SEARCH
-    // ============================================
-    const isOffplanSet = currentLead?.is_offplan === true || currentLead?.is_offplan === false;
-    const completionReady = currentLead?.is_offplan === false ||
-      (currentLead?.is_offplan === true && currentLead?.completion_range);
-
-    const readyToSearch =
-      currentLead?.interest &&
-      currentLead?.location &&
-      currentLead?.size &&
-      isOffplanSet &&
-      completionReady &&
-      currentLead?.budget;
-
-    console.log('Ready to search:', !!readyToSearch);
-
-    if (readyToSearch) {
-      await sendMessage(
-        tenantWhatsApp, from,
-        `✅ Got it! Let me find the best matches for you...\n\n` +
-        `📋 Your preferences:\n` +
-        `• Type: ${currentLead.interest}\n` +
-        `• Location: ${currentLead.location}\n` +
-        `• Size: ${currentLead.size}\n` +
-        `• Budget: KES ${Number(currentLead.budget).toLocaleString()}\n\n` +
-        `Searching properties... 🔍`
-      );
-
-      const properties = await searchProperties(
-        tenant.id,
-        currentLead.interest,
-        currentLead.location,
-        currentLead.size,
-        currentLead.budget,
-        currentLead.is_offplan,
-        currentLead.completion_range
-      );
-
-      await handlePropertyResults(
-        properties, currentLead, tenant, tenantWhatsApp,
-        from, agentName, agentPhone, cleanLeadPhone, kenyaTime
-      );
-      return;
-    }
-
-    // ============================================
-    // STEP 8: AI ENGINE
-    // All simple cases handled — use AI for natural
-    // language understanding and asking next question
-    // ============================================
-    const conversationHistory = currentLead?.conversation_history || [];
+    const conversationHistory = lead?.conversation_history || [];
 
     console.log('Processing with AI...');
-    console.log('Lead stage:', currentLead?.conversation_stage);
+    console.log('Lead stage:', lead?.conversation_stage);
     console.log('History length:', conversationHistory.length);
 
     const aiResult = await processAIConversation({
       userMessage: message,
-      lead: currentLead,
+      lead: lead,
       tenant: tenant,
       conversationHistory: conversationHistory,
       agentName: agentName,
       agentPhone: agentPhone,
-      isNewLead: !currentLead
+      isNewLead: !lead
     });
 
     console.log('AI action:', aiResult.action);
     console.log('AI extracted:', JSON.stringify(aiResult.extracted));
 
+    // Update conversation history
     const updatedHistory = [
       ...conversationHistory,
       { role: 'user', content: message },
       { role: 'assistant', content: aiResult.message }
-    ].slice(-10);
+    ];
 
-    // ============================================
-    // STEP 9: SAVE AI EXTRACTED DATA — PATCH ONLY
-    // AI extracts name, location, and complex fields
-    // Same rule: never overwrite existing DB fields
-    // ============================================
-    const aiUpdate = {
-      conversation_history: updatedHistory,
+    const trimmedHistory = updatedHistory.slice(-6);
+
+    // Update lead with extracted information
+    const leadUpdateData = {
+      conversation_history: trimmedHistory,
       conversation_stage: aiResult.action
     };
 
     if (aiResult.extracted) {
       const e = aiResult.extracted;
 
-      if (e.name && !currentLead?.name) aiUpdate.name = e.name;
-
-      if (e.interest && !currentLead?.interest) {
-        const interestMap = {
-          'buy': 'Buy', 'buying': 'Buy', 'purchase': 'Buy',
-          'rent': 'Rent', 'renting': 'Rent', 'rental': 'Rent', 'land': 'Land'
-        };
-        aiUpdate.interest = interestMap[e.interest.toLowerCase()] || e.interest;
+      if (e.name && e.name !== null) {
+        leadUpdateData.name = e.name;
       }
 
-      if (e.location && !currentLead?.location) {
-        aiUpdate.location = e.location.split(' ')
+      if (e.interest && e.interest !== null) {
+        const interestMap = {
+          'buy': 'Buy', 'buying': 'Buy', 'purchase': 'Buy',
+          'rent': 'Rent', 'renting': 'Rent', 'rental': 'Rent',
+          'land': 'Land'
+        };
+        leadUpdateData.interest = interestMap[e.interest.toLowerCase()] || e.interest;
+      }
+
+      if (e.location && e.location !== null) {
+        leadUpdateData.location = e.location
+          .split(' ')
           .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
           .join(' ');
       }
 
-      if (!currentLead?.size) {
-        if (e.bedrooms !== null && e.bedrooms !== undefined) {
-          const n = parseInt(e.bedrooms);
-          if (!isNaN(n)) { aiUpdate.size = n === 0 ? 'Studio' : `${n} bedroom`; aiUpdate.bedrooms = n; }
-        } else if (e.size) {
-          aiUpdate.size = e.size;
-          if (e.size.toLowerCase().includes('studio')) aiUpdate.bedrooms = 0;
-          else { const m = e.size.match(/(\d+)/); if (m) aiUpdate.bedrooms = parseInt(m[1]); }
+      if (e.bedrooms !== null && e.bedrooms !== undefined) {
+        const bedroomNum = parseInt(e.bedrooms);
+        if (!isNaN(bedroomNum)) {
+          leadUpdateData.size = bedroomNum === 0 ? 'Studio' : `${bedroomNum} bedroom`;
+          leadUpdateData.bedrooms = bedroomNum;
         }
-      }
-
-      // Budget from AI — only when size and offplan are known
-      if (!currentLead?.budget && currentLead?.size &&
-          (currentLead?.is_offplan === true || currentLead?.is_offplan === false)) {
-        if (e.budget !== null && e.budget !== undefined) {
-          let bv = e.budget;
-          if (typeof bv === 'string') {
-            bv = bv.replace(/KES/gi, '').replace(/,/g, '').trim();
-            if (bv.toLowerCase().endsWith('m')) bv = parseFloat(bv) * 1000000;
-            else if (bv.toLowerCase().endsWith('k')) bv = parseFloat(bv) * 1000;
-            else bv = parseFloat(bv);
+      } else if (e.size && e.size !== null) {
+        leadUpdateData.size = e.size;
+        if (e.size.toLowerCase().includes('studio')) {
+          leadUpdateData.bedrooms = 0;
+        } else {
+          const match = e.size.match(/(\d+)/);
+          if (match) {
+            leadUpdateData.bedrooms = parseInt(match[1]);
           }
-          if (!isNaN(bv) && bv >= 100000) aiUpdate.budget = bv.toString();
         }
       }
 
-      // Offplan from AI — only if not already set
-      if ((e.is_offplan === true || e.is_offplan === false) &&
-          currentLead?.is_offplan === null || currentLead?.is_offplan === undefined) {
-        aiUpdate.is_offplan = e.is_offplan;
+      if (e.budget !== null && e.budget !== undefined) {
+    let budgetValue = e.budget.toString().toLowerCase();
+    
+    // Hard check: If the user said "12m" and we are in budget stage, it is currency.
+    if (budgetValue.includes('m')) {
+        budgetValue = parseFloat(budgetValue) * 1000000;
+    } else if (budgetValue.includes('k')) {
+        budgetValue = parseFloat(budgetValue) * 1000;
+    }
+    
+    if (!isNaN(budgetValue) && budgetValue > 1000) { // Budgets are rarely under 1000 KES
+        leadUpdateData.budget = budgetValue.toString();
+    }
+}
+      if (e.is_offplan !== null && e.is_offplan !== undefined) {
+        leadUpdateData.is_offplan = e.is_offplan;
       }
 
-      // Completion range from AI — must contain a 4-digit year to be valid
-      if (e.completion_range && !currentLead?.completion_range) {
-        if (/\d{4}/.test(e.completion_range)) {
-          aiUpdate.completion_range = e.completion_range;
-        }
+      if (e.completion_range && e.completion_range !== null) {
+        leadUpdateData.completion_range = e.completion_range;
       }
 
-      // Restart
       if (e.restart === true) {
-        Object.assign(aiUpdate, {
-          interest: null, location: null, size: null, budget: null,
-          is_offplan: null, completion_range: null, search_results: null,
-          conversation_history: []
-        });
+        leadUpdateData.interest = null;
+        leadUpdateData.location = null;
+        leadUpdateData.size = null;
+        leadUpdateData.budget = null;
+        leadUpdateData.is_offplan = null;
+        leadUpdateData.completion_range = null;
+        leadUpdateData.search_results = null;
+        leadUpdateData.conversation_history = [];
       }
     }
 
-    // Create new lead
-    if (!currentLead) {
+    console.log('Updating lead with:', JSON.stringify(leadUpdateData, null, 2));
+
+    // Handle restart
+    if (aiResult.extracted?.restart) {
+      await supabase
+        .from('leads')
+        .update({
+          interest: null,
+          location: null,
+          size: null,
+          budget: null,
+          is_offplan: null,
+          completion_range: null,
+          conversation_stage: 'continue',
+          conversation_history: [],
+          search_results: null
+        })
+        .eq('id', lead.id);
+    }
+
+    // CREATE new lead if does not exist
+    if (!lead) {
       const { data: newLead, error: createError } = await supabase
         .from('leads')
         .insert({
-          phone: from, tenant_id: tenant.id, status: 'New',
+          phone: from,
+          tenant_id: tenant.id,
+          status: 'New',
           conversation_stage: aiResult.action,
-          conversation_history: updatedHistory,
-          name: aiUpdate.name || null,
-          interest: aiUpdate.interest || null,
-          location: aiUpdate.location || null,
-          size: aiUpdate.size || null,
-          budget: aiUpdate.budget || null,
-          is_offplan: aiUpdate.is_offplan ?? null,
-          completion_range: aiUpdate.completion_range || null
+          conversation_history: trimmedHistory,
+          name: aiResult.extracted?.name || null,
+          interest: aiResult.extracted?.interest || null,
+          location: aiResult.extracted?.location || null,
+          size: aiResult.extracted?.size || null,
+          budget: aiResult.extracted?.budget?.toString() || null,
+          is_offplan: aiResult.extracted?.is_offplan ?? null,
+          completion_range: aiResult.extracted?.completion_range || null
         })
-        .select().single();
+        .select()
+        .single();
 
-      if (createError) console.error('Error creating lead:', createError);
+      if (createError) {
+        console.error('Error creating lead:', createError);
+      }
+
       await sendMessage(tenantWhatsApp, from, aiResult.message);
       return;
     }
 
     // Update existing lead
-    await supabase.from('leads').update(aiUpdate).eq('id', lead.id);
+    await supabase
+      .from('leads')
+      .update(leadUpdateData)
+      .eq('id', lead.id);
 
-    // ============================================
-    // STEP 10: HANDLE SPECIAL AI ACTIONS
-    // ============================================
-
+    // ACTION: search_properties
     if (aiResult.action === 'search_properties') {
       await sendMessage(tenantWhatsApp, from, aiResult.message);
 
-      const { data: searchLead } = await supabase.from('leads').select('*').eq('id', lead.id).single();
+      const { data: freshLead } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('id', lead.id)
+        .single();
 
-      console.log('Searching with final lead data:', {
-        interest: searchLead?.interest, location: searchLead?.location,
-        size: searchLead?.size, budget: searchLead?.budget,
-        is_offplan: searchLead?.is_offplan, completion_range: searchLead?.completion_range
+      const searchInterest = freshLead?.interest || aiResult.extracted?.interest;
+      const searchLocation = freshLead?.location || aiResult.extracted?.location;
+      const searchSize = freshLead?.size || aiResult.extracted?.size;
+      const searchBudget = freshLead?.budget || aiResult.extracted?.budget;
+      const searchIsOffplan = freshLead?.is_offplan;
+      const searchCompletionRange = freshLead?.completion_range;
+
+      console.log('Searching with AI extracted data:', {
+        searchInterest,
+        searchLocation,
+        searchSize,
+        searchBudget,
+        searchIsOffplan,
+        searchCompletionRange
       });
 
       const properties = await searchProperties(
-        tenant.id, searchLead?.interest, searchLead?.location,
-        searchLead?.size, searchLead?.budget,
-        searchLead?.is_offplan, searchLead?.completion_range
+        tenant.id,
+        searchInterest,
+        searchLocation,
+        searchSize,
+        searchBudget,
+        searchIsOffplan,
+        searchCompletionRange
       );
 
       if (properties.length > 0) {
         const searchResultsToSave = properties.map((p, i) => ({
-          number: i + 1, id: p.id, name: p.property_name, price: p.price,
-          location: p.location, address: p.address, bedrooms: p.bedrooms,
-          plot_size: p.plot_size, type: p.type, photo_url: p.photo_url
+          number: i + 1,
+          id: p.id,
+          name: p.property_name,
+          price: p.price,
+          location: p.location,
+          address: p.address,
+          bedrooms: p.bedrooms,
+          plot_size: p.plot_size,
+          type: p.type,
+          photo_url: p.photo_url
         }));
 
-        await supabase.from('leads').update({
-          search_results: searchResultsToSave,
-          conversation_stage: 'completed',
-          status: 'Contacted'
-        }).eq('id', lead.id);
+        await supabase
+          .from('leads')
+          .update({
+            search_results: searchResultsToSave,
+            conversation_stage: 'completed',
+            status: 'Contacted'
+          })
+          .eq('id', lead.id);
+
+        console.log(`Sending ${properties.length} properties...`);
 
         for (let i = 0; i < properties.length; i++) {
           const property = properties[i];
+
           try {
-            const sizeText = property.type === 'Land' ? `${property.plot_size}`
-              : property.bedrooms === 0 ? `Studio`
-              : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
+            const sizeText = property.type === 'Land'
+              ? `${property.plot_size}`
+              : property.bedrooms === 0
+                ? `Studio`
+                : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
+
             const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
             const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
 
             const propertyHeader =
-              `🏢 *PROPERTY ${i + 1}*\n──────────\n\n` +
+              `🏢 *PROPERTY ${i + 1}*\n` +
+              `──────────\n\n` +
               (property.project_name ? `*${property.project_name}*\n` : '') +
               `*${property.property_name}*\n\n` +
-              `📍 ${property.location}\n💰 ${priceFormatted}\n` +
+              `📍 ${property.location}\n` +
+              `💰 ${priceFormatted}\n` +
               `🛏 ${sizeText}${sqmText}\n` +
               (property.completion_date ? `🏗 Completion: ${property.completion_date}\n` : '') +
               `📮 ${property.address}`;
 
-            const descriptionText = property.description ? `\n\n${property.description}` : '';
+            const descriptionText = property.description
+              ? `\n\n${property.description}`
+              : '';
+
             const footer = `\n\n──────────\nReply *Property${i + 1}* to book a viewing`;
             const fullMessage = propertyHeader + descriptionText + footer;
+
+            console.log(`Sending property ${i + 1}: ${property.property_name} (${fullMessage.length} chars)`);
 
             if (fullMessage.length <= 1500) {
               await sendMessage(tenantWhatsApp, from, fullMessage, property.photo_url || null);
@@ -970,7 +1228,9 @@ router.post('/', async (req, res) => {
                 }
               }
             }
+
             if (i < properties.length - 1) await delay(2000);
+
           } catch (propError) {
             console.error(`Error sending property ${i + 1}:`, propError.message);
             continue;
@@ -978,9 +1238,12 @@ router.post('/', async (req, res) => {
         }
 
         const followUpAI = await processAIConversation({
-          userMessage: `[SYSTEM: ${properties.length} properties sent. Brief friendly follow-up asking if they want to book a viewing. Mention Property1, Property2 etc.]`,
-          lead: { ...searchLead, conversation_stage: 'completed' },
-          tenant, conversationHistory: updatedHistory, agentName, agentPhone
+          userMessage: `[SYSTEM: ${properties.length} properties were just sent to the user. Send a brief friendly follow up asking if they would like to book a viewing for any of them. Mention they can reply Property1, Property2 etc.]`,
+          lead: { ...lead, conversation_stage: 'completed' },
+          tenant: tenant,
+          conversationHistory: trimmedHistory,
+          agentName: agentName,
+          agentPhone: agentPhone
         });
 
         await delay(1500);
@@ -988,129 +1251,347 @@ router.post('/', async (req, res) => {
 
       } else {
         const noResultAI = await processAIConversation({
-          userMessage: `[SYSTEM: No properties found. Apologize naturally and suggest contacting the agent. Be warm.]`,
-          lead, tenant, conversationHistory: updatedHistory, agentName, agentPhone
+          userMessage: `[SYSTEM: No properties found matching the user criteria. Apologize naturally and suggest they contact the agent. Be helpful and warm.]`,
+          lead: lead,
+          tenant: tenant,
+          conversationHistory: trimmedHistory,
+          agentName: agentName,
+          agentPhone: agentPhone
         });
 
-        await supabase.from('leads').update({ conversation_stage: 'no_results' }).eq('id', lead.id);
+        await supabase
+          .from('leads')
+          .update({ conversation_stage: 'no_results' })
+          .eq('id', lead.id);
+
         await sendMessage(tenantWhatsApp, from, noResultAI.message);
 
         if (agentPhone) {
-          await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.NO_PROPERTY_FOUND,
-            { "1": lead.name || 'Unknown', "2": cleanLeadPhone, "3": kenyaTime }
+          await sendTemplateToAgent(
+            tenantWhatsApp,
+            agentPhone,
+            TEMPLATES.NO_PROPERTY_FOUND,
+            {
+              "1": lead.name || 'Unknown',
+              "2": cleanLeadPhone,
+              "3": kenyaTime
+            }
           );
         }
       }
+
       return;
     }
 
+    // ACTION: booking
     if (aiResult.action === 'booking') {
       let propertyNumber = aiResult.extracted?.property_number;
+
       if (!propertyNumber) {
-        const match = message.match(/property\s*(\d+)/i) || message.match(/^(\d+)$/);
+        const match = message.match(/property\s*(\d+)/i) ||
+          message.match(/^(\d+)$/);
         if (match) propertyNumber = parseInt(match[1]);
       }
 
+      console.log('Booking property number:', propertyNumber);
+
       if (!propertyNumber) {
-        await sendMessage(tenantWhatsApp, from, `Please reply with the property number you want to view.\n\nExample: *Property1* or just *1*`);
-        return;
-      }
-
-      let searchResults = currentLead?.search_results || [];
-      if (!searchResults || searchResults.length === 0) {
-        const { data: fl } = await supabase.from('leads').select('search_results').eq('id', lead.id).single();
-        searchResults = fl?.search_results || [];
-      }
-
-      const selectedProperty = searchResults.find(p => p.number === propertyNumber);
-      if (!selectedProperty) {
-        await sendMessage(tenantWhatsApp, from,
-          `I could not find property ${propertyNumber}.\n\nPlease reply with a number from 1 to ${searchResults.length || '?'}.\n\nOr reply *HI* to start a new search.`
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Please reply with the property number you want to view.\n\nExample: *Property1* or just *1*`
         );
         return;
       }
 
-      await sendMessage(tenantWhatsApp, from, `Great choice! 🎉 Let me check availability for *${selectedProperty.name}*...`);
+      let searchResults = lead?.search_results || [];
 
-      await supabase.from('leads').update({
-        selected_property_number: propertyNumber,
-        selected_property_id: selectedProperty.id,
-        last_viewed_property: selectedProperty.name,
-        conversation_stage: 'awaiting_time_slot'
-      }).eq('id', lead.id);
+      if (!searchResults || searchResults.length === 0) {
+        const { data: freshLead } = await supabase
+          .from('leads')
+          .select('search_results')
+          .eq('id', lead.id)
+          .single();
 
-      const slotsResponse = await fetch(`${BACKEND_URL}/api/available-slots-v2`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenantId: tenant.id, propertyId: selectedProperty.id, leadId: lead.id })
-      });
+        searchResults = freshLead?.search_results || [];
+      }
+
+      console.log('Search results count:', searchResults.length);
+      console.log('Looking for property number:', propertyNumber);
+
+      const selectedProperty = searchResults.find(p => p.number === propertyNumber);
+
+      console.log('Selected property:', selectedProperty?.name);
+
+      if (!selectedProperty) {
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `I could not find property ${propertyNumber} in your search results.\n\n` +
+          `Please reply with a number from 1 to ${searchResults.length || '?'}.\n\n` +
+          `Or reply *HI* to start a new search.`
+        );
+        return;
+      }
+
+      await sendMessage(
+        tenantWhatsApp,
+        from,
+        `Great choice! 🎉 Let me check availability for *${selectedProperty.name}*...`
+      );
+
+      await supabase
+        .from('leads')
+        .update({
+          selected_property_number: propertyNumber,
+          selected_property_id: selectedProperty.id,
+          last_viewed_property: selectedProperty.name,
+          conversation_stage: 'awaiting_time_slot'
+        })
+        .eq('id', lead.id);
+
+      const slotsResponse = await fetch(
+        `${process.env.BACKEND_URL}/api/available-slots-v2`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tenantId: tenant.id,
+            propertyId: selectedProperty.id,
+            leadId: lead.id
+          })
+        }
+      );
       const slotsData = await slotsResponse.json();
-      await supabase.from('leads').update({ available_slots: slotsData.slotMap }).eq('id', lead.id);
+
+      await supabase
+        .from('leads')
+        .update({ available_slots: slotsData.slotMap })
+        .eq('id', lead.id);
+
       await sendMessage(tenantWhatsApp, from, slotsData.message);
       return;
     }
 
+    // ACTION: create_booking (user selected a time slot)
+    if (aiResult.action === 'continue' &&
+      lead?.conversation_stage === 'awaiting_time_slot' &&
+      aiResult.extracted?.slot_number) {
+
+      const slotNumber = aiResult.extracted.slot_number;
+
+      const { data: freshLead } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('id', lead.id)
+        .single();
+
+      const propertyId = freshLead?.selected_property_id;
+      const slotMap = freshLead?.available_slots || '{}';
+
+      if (!propertyId) {
+        await sendMessage(tenantWhatsApp, from, aiResult.message);
+        return;
+      }
+
+      const bookingResponse = await fetch(
+        `${process.env.BACKEND_URL}/api/create-booking`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tenantId: tenant.id,
+            leadId: lead.id,
+            propertyId: propertyId,
+            slotNumber: slotNumber.toString(),
+            slotMap: slotMap,
+            leadName: freshLead?.name || 'Client',
+            leadPhone: from
+          })
+        }
+      );
+      const bookingData = await bookingResponse.json();
+
+      if (bookingData.success) {
+        await supabase
+          .from('leads')
+          .update({ conversation_stage: 'booking_confirmed' })
+          .eq('id', lead.id);
+
+        await sendMessage(tenantWhatsApp, from, bookingData.message);
+
+        if (agentPhone) {
+          await sendTemplateToAgent(
+            tenantWhatsApp,
+            agentPhone,
+            TEMPLATES.BOOKING_CONFIRMED,
+            {
+              "1": freshLead?.name || 'Unknown',
+              "2": cleanLeadPhone,
+              "3": bookingData.slotDetails?.property || 'N/A',
+              "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
+              "5": `KES ${freshLead?.budget || 'N/A'}`,
+              "6": freshLead?.location || 'N/A',
+              "7": bookingData.slotDetails?.date || 'N/A',
+              "8": bookingData.slotDetails?.time || 'N/A'
+            }
+          );
+        }
+
+      } else if (bookingData.slotTaken) {
+        const newSlotsResponse = await fetch(
+          `${process.env.BACKEND_URL}/api/available-slots-v2`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tenantId: tenant.id,
+              propertyId: propertyId,
+              leadId: lead.id
+            })
+          }
+        );
+        const newSlotsData = await newSlotsResponse.json();
+
+        await supabase
+          .from('leads')
+          .update({
+            conversation_stage: 'awaiting_time_slot',
+            available_slots: newSlotsData.slotMap
+          })
+          .eq('id', lead.id);
+
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Sorry, that slot was just taken. Here are the next available times:\n\n${newSlotsData.message}`
+        );
+      } else {
+        await sendMessage(tenantWhatsApp, from, aiResult.message);
+      }
+
+      return;
+    }
+
+    // ACTION: cancel_booking
     if (aiResult.action === 'cancel_booking') {
       await sendMessage(tenantWhatsApp, from, aiResult.message);
-      const cancelResponse = await fetch(`${BACKEND_URL}/api/cancel-booking`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id, calendarId: tenant.google_calendar_id })
-      });
+
+      const cancelResponse = await fetch(
+        `${process.env.BACKEND_URL}/api/cancel-booking`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leadId: lead.id,
+            calendarId: tenant.google_calendar_id
+          })
+        }
+      );
       const cancelData = await cancelResponse.json();
-      await supabase.from('leads').update({ conversation_stage: 'booking_cancelled' }).eq('id', lead.id);
+
+      await supabase
+        .from('leads')
+        .update({ conversation_stage: 'booking_cancelled' })
+        .eq('id', lead.id);
+
       await sendMessage(tenantWhatsApp, from, cancelData.userMessage);
+
       if (cancelData.agentNotification?.agentPhone) {
-        await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.BOOKING_CANCELLED,
-          { "1": lead.name || 'Unknown', "2": cleanLeadPhone }
+        await sendTemplateToAgent(
+          tenantWhatsApp,
+          agentPhone,
+          TEMPLATES.BOOKING_CANCELLED,
+          {
+            "1": lead.name || 'Unknown',
+            "2": cleanLeadPhone
+          }
         );
       }
       return;
     }
 
+    // ACTION: human_handoff
     if (aiResult.action === 'human_handoff') {
       await sendMessage(tenantWhatsApp, from, aiResult.message);
       return;
     }
 
-    if (currentLead?.awaiting_followup_response) {
-      if (message === '1' || msgLower.includes('interested')) {
-        await supabase.from('leads').update({
-          status: 'Hot Lead', conversation_stage: 'interested_after_viewing', awaiting_followup_response: false
-        }).eq('id', lead.id);
+    // ACTION: followup responses (interested / not interested)
+    if (lead?.awaiting_followup_response) {
+      if (message === '1' || message.toLowerCase().includes('interested')) {
+        await supabase
+          .from('leads')
+          .update({
+            status: 'Hot Lead',
+            conversation_stage: 'interested_after_viewing',
+            awaiting_followup_response: false
+          })
+          .eq('id', lead.id);
+
         await sendMessage(tenantWhatsApp, from, aiResult.message);
+
         if (agentPhone) {
-          await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.HOT_LEAD,
-            { "1": lead.name || 'Unknown', "2": cleanLeadPhone, "3": lead.last_viewed_property || 'N/A' }
+          await sendTemplateToAgent(
+            tenantWhatsApp,
+            agentPhone,
+            TEMPLATES.HOT_LEAD,
+            {
+              "1": lead.name || 'Unknown',
+              "2": cleanLeadPhone,
+              "3": lead.last_viewed_property || 'N/A'
+            }
           );
         }
         return;
       }
-      if (message === '2' || msgLower.includes('not interested')) {
-        await supabase.from('leads').update({
-          status: 'Not Interested', conversation_stage: 'not_interested_after_viewing', awaiting_followup_response: false
-        }).eq('id', lead.id);
+
+      if (message === '2' || message.toLowerCase().includes('not interested')) {
+        await supabase
+          .from('leads')
+          .update({
+            status: 'Not Interested',
+            conversation_stage: 'not_interested_after_viewing',
+            awaiting_followup_response: false
+          })
+          .eq('id', lead.id);
+
         await sendMessage(tenantWhatsApp, from, aiResult.message);
         return;
       }
     }
 
-    // DEFAULT
+    // DEFAULT: continue conversation
     await sendMessage(tenantWhatsApp, from, aiResult.message);
 
   } catch (error) {
     console.error('Error in webhook:', error);
+
     try {
       const { tenant } = await getTenantAndLead(to, from);
       if (tenant) {
-        await sendMessage(tenant.whatsapp_number, from,
-          `Sorry, something went wrong on our end.\n\nOur agent will contact you shortly to assist you.`
+        await sendMessage(
+          tenant.whatsapp_number,
+          from,
+          `Sorry, something went wrong on our end.\n\n` +
+          `Our agent will contact you shortly to assist you.`
         );
-        const { data: agentData } = await supabase.from('agents').select('phone')
-          .eq('tenant_id', tenant.id).eq('active', true).single();
+
+        const { data: agentData } = await supabase
+          .from('agents')
+          .select('phone')
+          .eq('tenant_id', tenant.id)
+          .eq('active', true)
+          .single();
+
         if (agentData?.phone) {
-          await sendMessage(tenant.whatsapp_number, `whatsapp:${agentData.phone}`,
-            `System Alert!\n\nA client needs manual assistance.\n\nClient number: ${from.replace('whatsapp:', '')}\n\nPlease contact them directly.`
+          await sendMessage(
+            tenant.whatsapp_number,
+            `whatsapp:${agentData.phone}`,
+            `System Alert!\n\n` +
+            `A client needs manual assistance.\n\n` +
+            `Client number: ${from.replace('whatsapp:', '')}\n\n` +
+            `Please contact them directly.`
           );
         }
       }
