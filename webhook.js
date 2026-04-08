@@ -725,23 +725,24 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Detect bedroom numbers
-    // CHANGE: Only extract bedrooms when size is not yet set, never during slot/property selection
-    const safeStageForBedrooms = !['awaiting_time_slot', 'booking_confirmed'].includes(
-      lead?.conversation_stage
-    ) && !lead?.size;
+    // Extract bedrooms only when size not yet saved
+    // and we are not in booking/slot stages
+    const safeStageForBedrooms = 
+      !['awaiting_time_slot', 'booking_confirmed'].includes(lead?.conversation_stage) &&
+      !lead?.size;
 
     if (safeStageForBedrooms) {
-      const bedroomMatch = msgLower.match(/(\d+)\s*bed/) ||
-        msgLower.match(/(\d+)\s*bedroom/) ||
+      // First check for explicit bedroom mentions like "3 bedroom" or "3bed"
+      const explicitBedroomMatch = msgLower.match(/(\d+)\s*bed/i) ||
+        msgLower.match(/(\d+)\s*bedroom/i) ||
         msgLower.match(/^studio$/i);
 
-      if (bedroomMatch) {
+      if (explicitBedroomMatch) {
         if (msgLower === 'studio') {
           preExtracted.bedrooms = 0;
           preExtracted.size = 'Studio';
         } else {
-          const num = parseInt(bedroomMatch[1]);
+          const num = parseInt(explicitBedroomMatch[1]);
           if (num >= 0 && num <= 10) {
             preExtracted.bedrooms = num;
             preExtracted.size = num === 0 ? 'Studio' : `${num} bedroom`;
@@ -749,55 +750,82 @@ router.post('/', async (req, res) => {
         }
       }
 
-      // CHANGE: bare digit for bedrooms ONLY when we know offplan is already set
-      // and we are specifically in need_size stage — prevents collision
-      if (!bedroomMatch && lead?.is_offplan !== null && lead?.is_offplan !== undefined) {
+      // Bare digit — ONLY treat as bedroom if:
+      // 1. It is a small number (1-10)
+      // 2. No budget indicator present in message
+      // 3. Not already extracted as budget
+      if (!explicitBedroomMatch && !preExtracted.budget) {
         const bareDigitMatch = msgLower.match(/^(\d+)$/);
         if (bareDigitMatch) {
           const num = parseInt(bareDigitMatch[1]);
-          if (num >= 0 && num <= 10) {
+          if (num >= 1 && num <= 10) {
             preExtracted.bedrooms = num;
-            preExtracted.size = num === 0 ? 'Studio' : `${num} bedroom`;
+            preExtracted.size = `${num} bedroom`;
+          } else if (num === 0) {
+            preExtracted.bedrooms = 0;
+            preExtracted.size = 'Studio';
           }
         }
       }
     }
 
-    const budgetPatterns = [
-      { pattern: /kes\s*(\d+\.?\d*)\s*m/i, multiplier: 1000000 },
-      { pattern: /kes\s*(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
-      { pattern: /kes\s*(\d+\.?\d*)\s*k/i, multiplier: 1000 },
-      { pattern: /(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
-      { pattern: /(\d+\.?\d*)\s*m\b/i, multiplier: 1000000 },
-      { pattern: /(\d+\.?\d*)\s*k\b/i, multiplier: 1000 },
-      { pattern: /^kes\s*([\d,]+)/i, multiplier: 1 },
-      { pattern: /^([\d,]+)$/, multiplier: 1 }
-    ];
+ // Only extract budget if we are in the need_budget stage
+    // OR the message clearly contains a budget indicator (M, K, million, KES)
+    // NEVER extract a bare small number as budget - it will collide with bedroom selection
+    const isBudgetStage = !lead?.budget && lead?.size && 
+      (lead?.is_offplan === true || lead?.is_offplan === false);
+    
+    const hasBudgetIndicator = /(\d+\.?\d*)\s*(m|million|k|thousand)\b/i.test(msgLower) ||
+      /kes\s*\d/i.test(msgLower);
 
-    for (const { pattern, multiplier } of budgetPatterns) {
-      const match = msgLower.match(pattern);
-      if (match) {
-        const amount = parseFloat(match[1].replace(/,/g, '')) * multiplier;
-        if (!isNaN(amount) && amount > 0) {
-          preExtracted.budget = amount;
-          break;
+    if (isBudgetStage || hasBudgetIndicator) {
+      const budgetPatterns = [
+        { pattern: /kes\s*(\d+\.?\d*)\s*m/i, multiplier: 1000000 },
+        { pattern: /kes\s*(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
+        { pattern: /kes\s*(\d+\.?\d*)\s*k/i, multiplier: 1000 },
+        { pattern: /(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
+        { pattern: /(\d+\.?\d*)\s*m\b/i, multiplier: 1000000 },
+        { pattern: /(\d+\.?\d*)\s*k\b/i, multiplier: 1000 },
+        { pattern: /^kes\s*([\d,]+)/i, multiplier: 1 },
+        // Only match bare large numbers (above 100,000) as budget
+        // Small numbers like 1, 2, 3 are NEVER budgets
+        { pattern: /^([\d,]{6,})$/, multiplier: 1 }
+      ];
+
+      for (const { pattern, multiplier } of budgetPatterns) {
+        const match = msgLower.match(pattern);
+        if (match) {
+          const amount = parseFloat(match[1].replace(/,/g, '')) * multiplier;
+          if (!isNaN(amount) && amount >= 100000) {
+            preExtracted.budget = amount;
+            break;
+          }
         }
       }
     }
-
     // If we have pre-extracted data, save it directly WITHOUT calling AI
     if (Object.keys(preExtracted).length > 0 && !preExtracted.restart) {
       console.log('Pre-extracted data (no AI needed):', preExtracted);
 
       const quickUpdate = {};
 
-      if (preExtracted.interest) quickUpdate.interest = preExtracted.interest;
+     if (preExtracted.interest) quickUpdate.interest = preExtracted.interest;
       if (preExtracted.location) quickUpdate.location = preExtracted.location;
-      if (preExtracted.is_offplan !== undefined) quickUpdate.is_offplan = preExtracted.is_offplan;
-      if (preExtracted.bedrooms !== undefined) quickUpdate.bedrooms = preExtracted.bedrooms;
-      if (preExtracted.size) quickUpdate.size = preExtracted.size;
-      if (preExtracted.budget) quickUpdate.budget = preExtracted.budget.toString();
+      if (preExtracted.is_offplan !== undefined && preExtracted.is_offplan !== null) {
+        quickUpdate.is_offplan = preExtracted.is_offplan;
+      }
+      if (preExtracted.bedrooms !== undefined && preExtracted.bedrooms !== null) {
+        quickUpdate.bedrooms = preExtracted.bedrooms;
+        // Always save size alongside bedrooms — they must stay in sync
+        quickUpdate.size = preExtracted.size || 
+          (preExtracted.bedrooms === 0 ? 'Studio' : `${preExtracted.bedrooms} bedroom`);
+      }
+      if (preExtracted.budget && preExtracted.budget >= 100000) {
+        quickUpdate.budget = preExtracted.budget.toString();
+      }
       if (preExtracted.completion_range) quickUpdate.completion_range = preExtracted.completion_range;
+
+      console.log('Quick update being saved:', JSON.stringify(quickUpdate));
 
       // Force valid offplan logic based on DB
       if (preExtracted.is_offplan !== undefined && lead?.interest && lead?.location) {
