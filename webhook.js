@@ -161,7 +161,7 @@ function extractBedrooms(sizeStr) {
 // ============================================
 // Helper: Search properties from Supabase
 // ============================================
-async function searchProperties(tenantId, interest, location, size, budget, isOffplan, completionRange) {
+async function searchProperties(tenantId, interest, location, size, budget, isOffplan, completionRange, lead) {
   try {
     const normalizedInterest = normalize(interest);
     const normalizedLocation = normalize(location);
@@ -228,9 +228,8 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
     const bedroomFilter = lead?.bedrooms !== undefined ? lead.bedrooms : extractBedrooms(size);
     
     if (bedroomFilter !== null && bedroomFilter !== undefined) {
-        query = query.eq('bedrooms', bedroomFilter);
-        console.log('STRICT FILTER: Only showing', bedroomFilter, 'bedrooms');
-    } else {
+  query = query.eq('bedrooms', bedroomFilter);
+} else {
         // CRITICAL: If the user hasn't picked a bedroom count yet, 
         // don't just return anything—wait for the filter!
         console.log('No bedroom filter found, search aborted to prevent wrong results');
@@ -803,7 +802,10 @@ router.post('/', async (req, res) => {
       if (preExtracted.is_offplan !== undefined) quickUpdate.is_offplan = preExtracted.is_offplan;
       if (preExtracted.bedrooms !== undefined) quickUpdate.bedrooms = preExtracted.bedrooms;
       if (preExtracted.size) quickUpdate.size = preExtracted.size;
-      if (preExtracted.budget) quickUpdate.budget = preExtracted.budget.toString();
+      if (preExtracted.budget) {
+  quickUpdate.budget = preExtracted.budget;
+  quickUpdate.budget_locked = true; // ✅ ADD THIS
+}
       if (preExtracted.completion_range) quickUpdate.completion_range = preExtracted.completion_range;
 
       // Force valid offplan logic based on DB
@@ -874,6 +876,7 @@ router.post('/', async (req, res) => {
         console.log('Ready to search:', readyToSearch, '| isOffplanSet:', isOffplanSet, '| completionReady:', completionReady);
 
         if (readyToSearch) {
+          console.log('🚀 FORCING PROPERTY SEARCH — NO AI');
           await sendMessage(
             tenantWhatsApp,
             from,
@@ -893,7 +896,8 @@ router.post('/', async (req, res) => {
             freshLead.size,
             freshLead.budget,
             freshLead.is_offplan,
-            freshLead.completion_range
+            freshLead.completion_range,
+            freshLead 
           );
 
           await handlePropertyResults(
@@ -944,6 +948,19 @@ router.post('/', async (req, res) => {
       }
     }
 
+    const missingFields = [];
+
+if (!freshLead.interest) missingFields.push('interest');
+if (!freshLead.location) missingFields.push('location');
+if (!freshLead.size) missingFields.push('size');
+if (freshLead.is_offplan === null || freshLead.is_offplan === undefined) missingFields.push('is_offplan');
+
+if (freshLead.is_offplan === true && !freshLead.completion_range) {
+  missingFields.push('completion_range');
+}
+
+if (!freshLead.budget) missingFields.push('budget');
+
     // ============================================
     // AI CONVERSATION ENGINE
     // ============================================
@@ -960,7 +977,8 @@ router.post('/', async (req, res) => {
       conversationHistory: conversationHistory,
       agentName: agentName,
       agentPhone: agentPhone,
-      isNewLead: !lead
+      isNewLead: !lead,
+      missingFields 
     });
 
     console.log('AI action:', aiResult.action);
@@ -1022,7 +1040,7 @@ router.post('/', async (req, res) => {
         }
       }
 
-      if (e.budget !== null && e.budget !== undefined) {
+      if (!lead?.budget_locked && e.budget !== null && e.budget !== undefined) {
     let budgetValue = e.budget.toString().toLowerCase();
     
     // Hard check: If the user said "12m" and we are in budget stage, it is currency.
