@@ -103,7 +103,7 @@ function delay(ms) {
 }
 
 // ============================================
-// Helper: Normalize text
+// Helper: Normalize text (capitalize first letter)
 // ============================================
 function normalize(text) {
   if (!text) return '';
@@ -115,6 +115,7 @@ function normalize(text) {
 // ============================================
 function extractBedrooms(sizeStr) {
   if (!sizeStr) return null;
+  // Check for studio first
   if (sizeStr.toString().toLowerCase().includes('studio')) return 0;
   const match = sizeStr.toString().match(/\d+/);
   return match ? parseInt(match[0]) : null;
@@ -132,54 +133,57 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
       tenantId,
       normalizedInterest,
       normalizedLocation,
-      size,
-      budget,
-      isOffplan,
-      completionRange
+      size
     });
+    
+    // Parse budget - remove any non-numeric characters
+let budgetNumber = null;
+if (budget) {
+  const cleanBudget = budget.toString().replace(/[^0-9.]/g, '');
+  budgetNumber = parseFloat(cleanBudget);
+}
 
-    let budgetNumber = null;
-    if (budget) {
-      const cleanBudget = budget.toString().replace(/[^0-9.]/g, '');
-      budgetNumber = parseFloat(cleanBudget);
+let query = supabase
+  .from('properties')
+  .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url, description, completion_date, is_offplan, sqm, project_name')
+  .eq('tenant_id', tenantId)
+  .ilike('type', normalizedInterest)
+  .ilike('location', normalizedLocation)
+  .eq('available', true)
+  .order('price', { ascending: true })
+  .limit(7);
+
+// Add budget filter with 20% flexibility
+// This means if user budget is 10M we show properties up to 12M
+// so we dont miss good matches that are slightly above budget
+if (budgetNumber && budgetNumber > 0) {
+  const flexibleBudget = budgetNumber * 1.2;
+  query = query.lte('price', flexibleBudget);
+}
+
+// Add offplan filter
+if (isOffplan === true) {
+  query = query.eq('is_offplan', true)
+
+  // Add completion date range filter
+  if (completionRange && completionRange !== 'any') {
+    if (completionRange === '2026') {
+      query = query.ilike('completion_date', '%2026%')
+    } else if (completionRange === '2027') {
+      query = query.ilike('completion_date', '%2027%')
+    } else if (completionRange === '2028') {
+      query = query.ilike('completion_date', '%2028%')
+    } else if (completionRange === '2029+') {
+      // For 2029 and beyond we exclude 2026 2027 2028
+      query = query.not('completion_date', 'ilike', '%2026%')
+        .not('completion_date', 'ilike', '%2027%')
+        .not('completion_date', 'ilike', '%2028%')
     }
-
-    let query = supabase
-      .from('properties')
-      .select('id, property_name, type, price, bedrooms, plot_size, location, address, photo_url, description, completion_date, is_offplan, sqm, project_name')
-      .eq('tenant_id', tenantId)
-      .ilike('type', normalizedInterest)
-      .ilike('location', normalizedLocation)
-      .eq('available', true)
-      .order('price', { ascending: true })
-      .limit(7);
-
-    if (budgetNumber && budgetNumber > 0) {
-      const flexibleBudget = budgetNumber * 1.2;
-      query = query.lte('price', flexibleBudget);
-    }
-
-    if (isOffplan === true) {
-      query = query.eq('is_offplan', true);
-      if (completionRange && completionRange !== 'any') {
-        if (completionRange === '2026') {
-          query = query.ilike('completion_date', '%2026%');
-        } else if (completionRange === '2027') {
-          query = query.ilike('completion_date', '%2027%');
-        } else if (completionRange === '2028') {
-          query = query.ilike('completion_date', '%2028%');
-        } else if (completionRange === '2029+') {
-          query = query
-            .not('completion_date', 'ilike', '%2026%')
-            .not('completion_date', 'ilike', '%2027%')
-            .not('completion_date', 'ilike', '%2028%');
-        } else {
-          query = query.ilike('completion_date', `%${completionRange}%`);
-        }
-      }
-    } else if (isOffplan === false) {
-      query = query.eq('is_offplan', false);
-    }
+  }
+} else if (isOffplan === false) {
+  query = query.eq('is_offplan', false)
+}
+// If isOffplan is null show all properties
 
     if (normalizedInterest === 'Land') {
       const cleanPlotSize = size ? size.replace(/\s+/g, '').toLowerCase() : '';
@@ -189,9 +193,8 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
     } else {
       const bedroomNumber = extractBedrooms(size);
       console.log('Extracted bedroom number:', bedroomNumber);
-      if (bedroomNumber !== null && bedroomNumber !== undefined) {
+      if (bedroomNumber) {
         query = query.eq('bedrooms', bedroomNumber);
-        console.log('Filtering by bedrooms:', bedroomNumber);
       }
     }
 
@@ -211,121 +214,29 @@ async function searchProperties(tenantId, interest, location, size, budget, isOf
 }
 
 // ============================================
-// Helper: Send properties to user
+// Helper: Format Kenya date
 // ============================================
-async function sendProperties(properties, lead, tenant, tenantWhatsApp, from, agentName, agentPhone, cleanLeadPhone, kenyaTime) {
-  if (properties.length === 0) {
-    await sendMessage(
-      tenantWhatsApp,
-      from,
-      `Sorry, we could not find properties matching your criteria at the moment.\n\n` +
-      `Our agent will contact you shortly to assist you personally.\n\n` +
-      `Agent: ${agentName}\n` +
-      `Phone: ${agentPhone || 'N/A'}\n\n` +
-      `You can also reply HI to start a new search.`
-    );
+function formatKenyaDate(isoString) {
+  const date = new Date(isoString);
+  return date.toLocaleDateString('en-KE', {
+    timeZone: 'Africa/Nairobi',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
+  });
+}
 
-    if (agentPhone) {
-      await sendTemplateToAgent(
-        tenantWhatsApp,
-        agentPhone,
-        TEMPLATES.NO_PROPERTY_FOUND,
-        {
-          "1": lead.name || 'Unknown',
-          "2": cleanLeadPhone,
-          "3": kenyaTime
-        }
-      );
-    }
-    return;
-  }
-
-  // Save search results
-  const searchResultsToSave = properties.map((p, i) => ({
-    number: i + 1,
-    id: p.id,
-    name: p.property_name,
-    price: p.price,
-    location: p.location,
-    address: p.address,
-    bedrooms: p.bedrooms,
-    plot_size: p.plot_size,
-    type: p.type,
-    photo_url: p.photo_url
-  }));
-
-  await supabase
-    .from('leads')
-    .update({
-      search_results: searchResultsToSave,
-      conversation_stage: 'completed',
-      status: 'Contacted'
-    })
-    .eq('id', lead.id);
-
-  console.log(`Sending ${properties.length} properties to user...`);
-
-  for (let i = 0; i < properties.length; i++) {
-    const property = properties[i];
-
-    try {
-      const sizeText = property.type === 'Land'
-        ? `${property.plot_size}`
-        : property.bedrooms === 0
-          ? `Studio`
-          : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
-
-      const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
-      const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
-
-      const propertyHeader =
-        `🏢 *PROPERTY ${i + 1}*\n` +
-        `──────────\n\n` +
-        (property.project_name ? `*${property.project_name}*\n` : '') +
-        `*${property.property_name}*\n\n` +
-        `📍 ${property.location}\n` +
-        `💰 ${priceFormatted}\n` +
-        `🛏 ${sizeText}${sqmText}\n` +
-        (property.completion_date ? `🏗 Completion: ${property.completion_date}\n` : '') +
-        `📮 ${property.address}`;
-
-      const descriptionText = property.description ? `\n\n${property.description}` : '';
-      const footer = `\n\n──────────\nReply *Property${i + 1}* to book a viewing`;
-      const fullMessage = propertyHeader + descriptionText + footer;
-
-      console.log(`Sending property ${i + 1}: ${property.property_name} (${fullMessage.length} chars)`);
-
-      if (fullMessage.length <= 1500) {
-        await sendMessage(tenantWhatsApp, from, fullMessage, property.photo_url || null);
-      } else {
-        await sendMessage(tenantWhatsApp, from, propertyHeader + footer, property.photo_url || null);
-        if (property.description) {
-          await delay(1000);
-          const chunks = [];
-          let start = 0;
-          while (start < property.description.length) {
-            let end = start + 1500;
-            if (end < property.description.length) {
-              const lastNewline = property.description.lastIndexOf('\n', end);
-              if (lastNewline > start) end = lastNewline;
-            }
-            chunks.push(property.description.substring(start, end));
-            start = end;
-          }
-          for (const chunk of chunks) {
-            await sendMessage(tenantWhatsApp, from, chunk, null);
-            await delay(1000);
-          }
-        }
-      }
-
-      if (i < properties.length - 1) await delay(2000);
-
-    } catch (propError) {
-      console.error(`Error sending property ${i + 1}:`, propError.message);
-      continue;
-    }
-  }
+// ============================================
+// Helper: Format Kenya time
+// ============================================
+function formatKenyaTime(isoString) {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString('en-KE', {
+    timeZone: 'Africa/Nairobi',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
 }
 
 // ============================================
@@ -338,9 +249,11 @@ router.post('/', async (req, res) => {
 
   console.log(`Message from ${from} to ${to}: ${message}`);
 
+  // Respond to Twilio immediately to prevent timeout
   res.status(200).send('<Response></Response>');
 
   try {
+    // Look up tenant and lead
     const { tenant, lead } = await getTenantAndLead(to, from);
 
     if (!tenant) {
@@ -350,6 +263,7 @@ router.post('/', async (req, res) => {
 
     const tenantWhatsApp = tenant.whatsapp_number;
 
+    // Get agent details
     const { data: agentData } = await supabase
       .from('agents')
       .select('agent_name, phone, email')
@@ -363,6 +277,7 @@ router.post('/', async (req, res) => {
       ? lead.phone.replace('whatsapp:', '').trim()
       : from.replace('whatsapp:', '').trim();
 
+    // Get current Kenya time for templates
     const now = new Date();
     const kenyaTime = now.toLocaleTimeString('en-KE', {
       timeZone: 'Africa/Nairobi',
@@ -384,10 +299,9 @@ router.post('/', async (req, res) => {
       lead_name: lead?.name || null,
       lead_whatsapp: lead?.phone || null,
       last_viewed_property: lead?.last_viewed_property || null,
-      awaiting_followup_response: lead?.awaiting_followup_response || false,
       lead_is_offplan: lead?.is_offplan ?? null,
       lead_completion_range: lead?.completion_range || null,
-      lead_budget_ranges: lead?.available_slots || null,
+      awaiting_followup_response: lead?.awaiting_followup_response || false,
       tenant_id: tenant.id,
       tenant_company_name: tenant.company_name,
       tenant_bot_name: tenant.bot_name,
@@ -395,6 +309,7 @@ router.post('/', async (req, res) => {
       tenant_whatsapp: tenant.whatsapp_number
     };
 
+    // Process message through handleMessage
     const result = await handleMessage(input);
     console.log('Action:', result.action);
 
@@ -427,50 +342,135 @@ router.post('/', async (req, res) => {
       if (result.updateFields?.Location) updateData.location = result.updateFields.Location;
       if (result.updateFields?.Size) updateData.size = result.updateFields.Size;
       if (result.updateFields?.Status) updateData.status = result.updateFields.Status;
-      if (result.isOffplan !== null && result.isOffplan !== undefined) updateData.is_offplan = result.isOffplan;
+      if (result.isOffplan !== undefined && result.isOffplan !== null) updateData.is_offplan = result.isOffplan;
       if (result.completionRange) updateData.completion_range = result.completionRange;
 
       if (Object.keys(updateData).length > 0) {
         await supabase.from('leads').update(updateData).eq('id', lead.id);
       }
 
+      // Send reply first
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-     if (result.searchProperties) {
+      // Then search properties if needed
+    if (result.searchProperties) {
         const searchInterest = updateData.interest || lead.interest;
         const searchLocation = updateData.location || lead.location;
         const searchSize = updateData.size || lead.size;
-        const searchBudget = updateData.budget || lead.budget;
 
-        // Fetch fresh lead to get all saved fields including offplan and completion
-        const { data: freshLeadData } = await supabase
-          .from('leads')
-          .select('*')
-          .eq('id', lead.id)
-          .single();
+        console.log('Searching with:', { searchInterest, searchLocation, searchSize });
 
-        const searchIsOffplan = freshLeadData?.is_offplan ?? lead.is_offplan;
-        const searchCompletionRange = freshLeadData?.completion_range || lead.completion_range;
+    const properties = await searchProperties(
+  tenant.id,
+  searchInterest,
+  searchLocation,
+  searchSize,
+  lead.budget,
+  lead.is_offplan,
+  lead.completion_range
+);
 
-        console.log('Search params:', {
-          searchInterest, searchLocation, searchSize,
-          searchBudget, searchIsOffplan, searchCompletionRange
-        });
+        if (properties.length > 0) {
+          const searchResultsToSave = properties.map((p, i) => ({
+            number: i + 1,
+            id: p.id,
+            name: p.property_name,
+            price: p.price,
+            location: p.location,
+            address: p.address,
+            bedrooms: p.bedrooms,
+            plot_size: p.plot_size,
+            type: p.type,
+            photo_url: p.photo_url
+          }));
 
-        console.log('Searching with:', { searchInterest, searchLocation, searchSize, searchBudget, searchIsOffplan, searchCompletionRange });
+          await supabase
+            .from('leads')
+            .update({ search_results: searchResultsToSave })
+            .eq('id', lead.id);
 
-        const properties = await searchProperties(
-          tenant.id,
-          searchInterest,
-          searchLocation,
-          searchSize,
-          searchBudget,
-          searchIsOffplan,
-          searchCompletionRange
-        );
+          console.log(`Sending ${properties.length} properties to user...`);
 
-        const freshLead = freshLeadData || { ...lead, ...updateData };
-        await sendProperties(properties, freshLead, tenant, tenantWhatsApp, from, agentName, agentPhone, cleanLeadPhone, kenyaTime);
+          for (let i = 0; i < properties.length; i++) {
+            const property = properties[i];
+
+            try {
+              const sizeText = property.type === 'Land'
+  ? `${property.plot_size}`
+  : property.bedrooms === 0
+    ? `Studio`
+    : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
+
+const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
+const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
+
+const propertyMessage =
+   `🏢 *PROPERTY ${i + 1}*\n` +
+   `──────────\n\n` +
+  (property.project_name
+    ? `*${property.project_name}*\n`
+    : '') +
+  `*${property.property_name}*\n\n` +
+  `📍 ${property.location}\n` +
+  `💰 ${priceFormatted}\n` +
+  `🛏 ${sizeText}${sqmText}\n` +
+  (property.completion_date
+    ? `🏗 Completion: ${property.completion_date}\n`
+    : '') +
+  `📮 ${property.address}\n` +
+  (property.description
+    ? `\n${property.description}\n`
+    : '') +
+  `\n──────────\n` +
+  `Reply *Property${i + 1}* to book a viewing`;
+
+              console.log(`Sending property ${i + 1}: ${property.property_name}`);
+
+              await sendMessage(
+              tenantWhatsApp,
+              from,
+              propertyMessage,
+              property.photo_url || null
+            );
+
+              console.log(`Property ${i + 1} sent successfully`);
+
+              if (i < properties.length - 1) await delay(2000);
+
+            } catch (propError) {
+              console.error(`Error sending property ${i + 1}:`, propError.message);
+              continue;
+            }
+          }
+
+          console.log('All properties sent successfully');
+
+        } else {
+          console.log('No properties found - notifying user and agent');
+
+          await sendMessage(
+            tenantWhatsApp,
+            from,
+            `Sorry, we could not find any properties matching your criteria at the moment.\n\n` +
+            `Our agent will contact you shortly to assist you personally.\n\n` +
+            `Agent: ${agentName}\n` +
+            `Phone: ${agentPhone || 'N/A'}\n\n` +
+            `You can also reply HI to start a new search.`
+          );
+
+          if (agentPhone) {
+            await sendTemplateToAgent(
+              tenantWhatsApp,
+              agentPhone,
+              TEMPLATES.NO_PROPERTY_FOUND,
+              {
+                "1": lead.name || 'Unknown',
+                "2": cleanLeadPhone,
+                "3": kenyaTime
+              }
+            );
+          }
+        }
       }
 
       return;
@@ -480,13 +480,29 @@ router.post('/', async (req, res) => {
     // ACTION: fetch_locations
     // -----------------------------------------------
     if (result.action === 'fetch_locations' && lead) {
-      const updateData = { conversation_stage: 'fetching_locations' };
-      if (result.updateFields?.Budget) updateData.budget = result.updateFields.Budget;
-      if (result.updateFields?.Name) updateData.name = result.updateFields.Name;
-      if (result.isOffplan !== null && result.isOffplan !== undefined) updateData.is_offplan = result.isOffplan;
-      if (result.completionRange) updateData.completion_range = result.completionRange;
+  const fetchLocUpdate = {
+    conversation_stage: 'fetching_locations'
+  }
 
-      await supabase.from('leads').update(updateData).eq('id', lead.id);
+  // Save budget if just came from budget stage
+  if (result.updateFields?.Budget) {
+    fetchLocUpdate.budget = result.updateFields.Budget
+  }
+
+  // Save offplan preference and completion range
+  if (result.isOffplan !== undefined) {
+    fetchLocUpdate.is_offplan = result.isOffplan
+  }
+  if (result.completionRange) {
+    fetchLocUpdate.completion_range = result.completionRange
+  }
+
+  await supabase
+    .from('leads')
+    .update(fetchLocUpdate)
+    .eq('id', lead.id);
+
+      // Send checking message first
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
       const interest = result.interest || lead.interest;
@@ -503,15 +519,28 @@ router.post('/', async (req, res) => {
         const locations = [...new Set(locData.map(r => r.location).filter(Boolean))].sort();
         const formatted = locations.map(loc => `• ${loc}`).join('\n');
 
-        await supabase.from('leads').update({ conversation_stage: 'asked_location' }).eq('id', lead.id);
+        await supabase
+          .from('leads')
+          .update({ conversation_stage: 'asked_location' })
+          .eq('id', lead.id);
 
         await sendMessage(
           tenantWhatsApp,
           from,
-          `Which area are you interested in?\n\nWe have properties in:\n\n${formatted}\n\nJust type the area name.`
+          `Which area are you interested in?\n\n` +
+          `We have properties in:\n\n${formatted}\n\n` +
+          `Just type the area name.`
         );
       } else {
-        await sendMessage(tenantWhatsApp, from, `Sorry, no locations available right now.\n\nReply HI to start over.`);
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Sorry, no locations available for ${type} right now.\n\n` +
+            `Contact our agent for assistance.\n\n` +
+            `Agent: ${agentName}\n` +
+            `Phone: ${agentPhone || 'N/A'}\n\n` +
+            `You can also reply HI to start a new search.`
+        );
       }
       return;
     }
@@ -520,15 +549,15 @@ router.post('/', async (req, res) => {
     // ACTION: fetch_sizes
     // -----------------------------------------------
     if (result.action === 'fetch_sizes' && lead) {
-      const updateData = {
-        location: result.location,
-        conversation_stage: 'fetching_sizes'
-      };
-      if (result.isOffplan !== null && result.isOffplan !== undefined) updateData.is_offplan = result.isOffplan;
-      if (result.completionRange) updateData.completion_range = result.completionRange;
-      if (result.updateFields?.CompletionRange) updateData.completion_range = result.updateFields.CompletionRange;
+      await supabase
+        .from('leads')
+        .update({
+          location: result.location,
+          conversation_stage: 'fetching_sizes'
+        })
+        .eq('id', lead.id);
 
-      await supabase.from('leads').update(updateData).eq('id', lead.id);
+      // Send checking message first
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
       const interest = lead.interest || '';
@@ -536,22 +565,13 @@ router.post('/', async (req, res) => {
       const normalizedInterest = normalize(interest);
       const normalizedLocation = normalize(location);
 
-      // Get current offplan status
-      const currentIsOffplan = result.isOffplan ?? lead.is_offplan;
-
-      let sizeQuery = supabase
+      const { data: sizeData } = await supabase
         .from('properties')
         .select('bedrooms, plot_size, type')
         .eq('tenant_id', tenant.id)
         .ilike('type', normalizedInterest)
         .ilike('location', normalizedLocation)
         .eq('available', true);
-
-      // Filter by offplan if known
-      if (currentIsOffplan === true) sizeQuery = sizeQuery.eq('is_offplan', true);
-      if (currentIsOffplan === false) sizeQuery = sizeQuery.eq('is_offplan', false);
-
-      const { data: sizeData } = await sizeQuery;
 
       if (sizeData && sizeData.length > 0) {
         let options = '';
@@ -562,123 +582,44 @@ router.post('/', async (req, res) => {
           options = plots.map(p => `• ${p}`).join('\n');
           nextStage = 'asked_land_size';
         } else {
-          const beds = [...new Set(
-            sizeData.map(r => parseInt(r.bedrooms)).filter(n => !isNaN(n))
-          )].sort((a, b) => a - b);
+        const beds = [
+  ...new Set(
+    sizeData
+      .map(r => parseInt(r.bedrooms))
+      .filter(n => !isNaN(n))
+  )
+].sort((a, b) => a - b);
 
-          options = beds.map(b => {
-            if (b === 0) return `• Studio`;
-            return `• ${b} Bedroom${b > 1 ? 's' : ''}`;
-          }).join('\n');
-          nextStage = 'asked_size';
+options = beds.map(b => {
+  if (b === 0) return `• Studio`;
+  return `• ${b} Bedroom${b > 1 ? 's' : ''}`;
+}).join('\n');
+
+nextStage = 'asked_size';
         }
-
-        await supabase.from('leads').update({ conversation_stage: nextStage }).eq('id', lead.id);
-
-        const sizeQuestion = normalizedInterest === 'Land'
-          ? `What plot size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
-          : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\nJust type the number or reply Studio.`;
-
-        await sendMessage(tenantWhatsApp, from, sizeQuestion);
-      } else {
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `Sorry, no properties available in ${location} right now.\n\nReply HI to start over.`
-        );
-      }
-      return;
-    }
-
-// -----------------------------------------------
-    // ACTION: fetch_budget_ranges
-    // -----------------------------------------------
-    if (result.action === 'fetch_budget_ranges' && lead) {
-      const updateData = {
-        size: result.updateFields?.Size,
-        conversation_stage: 'fetching_budget_ranges'
-      };
-
-      await supabase.from('leads').update(updateData).eq('id', lead.id);
-      await sendMessage(tenantWhatsApp, from, result.replyMessage);
-
-      const normalizedInterest = normalize(lead.interest);
-      const normalizedLocation = normalize(lead.location || result.location);
-      const currentIsOffplan = lead.is_offplan;
-      const currentCompletion = lead.completion_range;
-      const size = result.updateFields?.Size || lead.size;
-
-      let priceQuery = supabase
-        .from('properties')
-        .select('price')
-        .eq('tenant_id', tenant.id)
-        .ilike('type', normalizedInterest)
-        .ilike('location', normalizedLocation)
-        .eq('available', true)
-        .not('price', 'is', null);
-
-      if (currentIsOffplan === true) priceQuery = priceQuery.eq('is_offplan', true);
-      if (currentIsOffplan === false) priceQuery = priceQuery.eq('is_offplan', false);
-
-      if (size) {
-        const bedroomNum = extractBedrooms(size);
-        if (bedroomNum !== null) {
-          priceQuery = priceQuery.eq('bedrooms', bedroomNum);
-        }
-      }
-
-      if (currentIsOffplan === true && currentCompletion && currentCompletion !== 'any') {
-        if (currentCompletion === '2026') priceQuery = priceQuery.ilike('completion_date', '%2026%');
-        else if (currentCompletion === '2027') priceQuery = priceQuery.ilike('completion_date', '%2027%');
-        else if (currentCompletion === '2028') priceQuery = priceQuery.ilike('completion_date', '%2028%');
-        else if (currentCompletion === '2029+') {
-          priceQuery = priceQuery
-            .not('completion_date', 'ilike', '%2026%')
-            .not('completion_date', 'ilike', '%2027%')
-            .not('completion_date', 'ilike', '%2028%');
-        }
-      }
-
-      const { data: priceData } = await priceQuery;
-
-      if (priceData && priceData.length > 0) {
-        const prices = priceData.map(r => r.price).filter(p => p > 0).sort((a, b) => a - b);
-        const minPrice = prices[0];
-        const maxPrice = prices[prices.length - 1];
-        const priceRange = `KES ${Number(minPrice).toLocaleString()} to KES ${Number(maxPrice).toLocaleString()}`;
 
         await supabase
           .from('leads')
-          .update({ conversation_stage: 'asked_budget' })
+          .update({ conversation_stage: nextStage })
           .eq('id', lead.id);
 
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `Almost there! 💰\n\n` +
-          `What is your budget?\n\n` +
-          `Properties matching your criteria range from:\n` +
-          `*${priceRange}*\n\n` +
-          `Just type your budget (e.g. 10M, 15M, KES 10,000,000)`
-        );
+        // Different question for land vs house
+        const sizeQuestion = normalizedInterest === 'Land'
+          ? `What plot size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
+          : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\nJust type the number.`;
+
+        await sendMessage(tenantWhatsApp, from, sizeQuestion);
+
       } else {
         await sendMessage(
           tenantWhatsApp,
           from,
-          `Sorry, we could not find properties matching your criteria.\n\n` +
-          `Our agent will contact you shortly:\n` +
-          `👤 ${agentName}\n` +
-          `📞 ${agentPhone || 'N/A'}\n\n` +
-          `Reply HI to start a new search.`
+          `Sorry, no properties available in ${location} right now.\n\n` + 
+          `Contact our agent for assistance.\n\n` +
+          `Agent: ${agentName}\n` +
+          `Phone: ${agentPhone || 'N/A'}\n\n` +
+          `You can also reply HI to start a new search.`
         );
-
-        if (agentPhone) {
-          await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.NO_PROPERTY_FOUND, {
-            "1": lead.name || 'Unknown',
-            "2": cleanLeadPhone,
-            "3": kenyaTime
-          });
-        }
       }
       return;
     }
@@ -697,6 +638,7 @@ router.post('/', async (req, res) => {
 
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
+      // Get property from saved search results
       const { data: freshLead } = await supabase
         .from('leads')
         .select('search_results')
@@ -715,14 +657,9 @@ router.post('/', async (req, res) => {
         return;
       }
 
-      console.log('Selected property:', selectedProperty.name);
+      console.log('Selected property from saved results:', selectedProperty.name, selectedProperty.id);
 
-      await sendMessage(
-        tenantWhatsApp,
-        from,
-        `Great choice! 🎉 Let me check availability for *${selectedProperty.name}*...`
-      );
-
+      // Get available slots
       const slotsResponse = await fetch(
         `https://property-bot-backend.onrender.com/api/available-slots-v2`,
         {
@@ -737,6 +674,7 @@ router.post('/', async (req, res) => {
       );
       const slotsData = await slotsResponse.json();
 
+      // Save property ID, slot map and property name to lead
       await supabase
         .from('leads')
         .update({
@@ -756,6 +694,7 @@ router.post('/', async (req, res) => {
     if (result.action === 'create_booking' && lead) {
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
+      // Fetch fresh lead data to get latest saved property ID and slot map
       const { data: freshLead } = await supabase
         .from('leads')
         .select('*')
@@ -799,28 +738,32 @@ router.post('/', async (req, res) => {
           .update({ conversation_stage: 'booking_confirmed' })
           .eq('id', lead.id);
 
+        // Confirm to user
         await sendMessage(tenantWhatsApp, from, bookingData.message);
 
-        if (agentPhone) {
-          await sendTemplateToAgent(
-            tenantWhatsApp,
-            agentPhone,
-            TEMPLATES.BOOKING_CONFIRMED,
-            {
-              "1": leadName || 'Unknown',
-              "2": cleanLeadPhone,
-              "3": bookingData.slotDetails?.property || 'N/A',
-              "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
-              "5": `KES ${freshLead?.budget || 'N/A'}`,
-              "6": freshLead?.location || 'N/A',
-              "7": bookingData.slotDetails?.date || 'N/A',
-              "8": bookingData.slotDetails?.time || 'N/A'
-            }
-          );
-        }
+        // Notify agent via template
+        await sendTemplateToAgent(
+          tenantWhatsApp,
+          agentPhone,
+          TEMPLATES.BOOKING_CONFIRMED,
+          {
+            "1": leadName || 'Unknown',
+            "2": cleanLeadPhone,
+            "3": bookingData.slotDetails?.property || 'N/A',
+            "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
+            "5": `KES ${freshLead?.budget || 'N/A'}`,
+            "6": freshLead?.location || 'N/A',
+            "7": bookingData.slotDetails?.date || 'N/A',
+            "8": bookingData.slotDetails?.time || 'N/A'
+          }
+        );
 
       } else if (bookingData.slotTaken) {
-        await sendMessage(tenantWhatsApp, from, `Sorry, that time slot was just taken.\n\nLet me find you another time...`);
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Sorry, that time slot was just taken.\n\nLet me find you another time...`
+        );
 
         const newSlotsResponse = await fetch(
           `https://property-bot-backend.onrender.com/api/available-slots-v2`,
@@ -851,7 +794,7 @@ router.post('/', async (req, res) => {
           tenantWhatsApp,
           from,
           `Sorry, something went wrong with your booking.\n\n` +
-          `Our agent will contact you shortly.\n\n` +
+          `Contact our agent for assistance.\n\n` +
           `Agent: ${agentName}\n` +
           `Phone: ${agentPhone || 'N/A'}`
         );
@@ -865,7 +808,10 @@ router.post('/', async (req, res) => {
     if (result.action === 'cancel_booking' && lead) {
       await supabase
         .from('leads')
-        .update({ conversation_stage: 'booking_cancelled', status: 'Cancelled' })
+        .update({
+          conversation_stage: 'booking_cancelled',
+          status: 'Cancelled'
+        })
         .eq('id', lead.id);
 
       const cancelResponse = await fetch(
@@ -884,13 +830,20 @@ router.post('/', async (req, res) => {
       await sendMessage(
         tenantWhatsApp,
         from,
-        cancelData.userMessage || `Your viewing has been cancelled.\n\nReply HI to search for another property.`
+        cancelData.userMessage ||
+        `Your viewing has been cancelled.\n\nReply HI to search for another property.`
       );
 
-      await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.BOOKING_CANCELLED, {
-        "1": lead.name || 'Unknown',
-        "2": cleanLeadPhone
-      });
+      // Notify agent via template
+      await sendTemplateToAgent(
+        tenantWhatsApp,
+        agentPhone,
+        TEMPLATES.BOOKING_CANCELLED,
+        {
+          "1": lead.name || 'Unknown',
+          "2": cleanLeadPhone
+        }
+      );
       return;
     }
 
@@ -909,11 +862,17 @@ router.post('/', async (req, res) => {
 
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.HOT_LEAD, {
-        "1": lead.name || 'Unknown',
-        "2": cleanLeadPhone,
-        "3": lead.last_viewed_property || 'N/A'
-      });
+      // Notify agent via template
+      await sendTemplateToAgent(
+        tenantWhatsApp,
+        agentPhone,
+        TEMPLATES.HOT_LEAD,
+        {
+          "1": lead.name || 'Unknown',
+          "2": cleanLeadPhone,
+          "3": lead.last_viewed_property || 'N/A'
+        }
+      );
       return;
     }
 
@@ -935,7 +894,7 @@ router.post('/', async (req, res) => {
     }
 
     // -----------------------------------------------
-    // DEFAULT: send reply for invalid/unknown actions
+    // ACTION: invalid or anything else
     // -----------------------------------------------
     if (result.replyMessage) {
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
@@ -944,6 +903,7 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error('Error in webhook:', error);
 
+    // Safety net — notify user and agent if anything fails
     try {
       const { tenant } = await getTenantAndLead(to, from);
       if (tenant) {
@@ -951,7 +911,7 @@ router.post('/', async (req, res) => {
           tenant.whatsapp_number,
           from,
           `Sorry, something went wrong on our end.\n\n` +
-          `Our agent will contact you shortly to assist you manually.`
+          `Our agent will contact you shortly to assist you.`
         );
 
         const { data: agentData } = await supabase
@@ -965,7 +925,10 @@ router.post('/', async (req, res) => {
           await sendMessage(
             tenant.whatsapp_number,
             `whatsapp:${agentData.phone}`,
-            `System Alert!\n\nA client needs manual assistance.\n\nClient: ${from.replace('whatsapp:', '')}\n\nPlease contact them directly.`
+            `System Alert!\n\n` +
+            `A client needs manual assistance.\n\n` +
+            `Client number: ${from.replace('whatsapp:', '')}\n\n` +
+            `Please contact them directly.`
           );
         }
       }
