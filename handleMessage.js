@@ -1,25 +1,54 @@
-// handleMessage.js - Smart conversation flow with dynamic suggestions
+// handleMessage.js - Enhanced conversation logic with natural language support + Follow-up handler
 
 async function handleMessage(input) {
   try {
+    // 1. Get input data
     const originalMessage = input.message || "";
     const message = originalMessage.toLowerCase().trim();
     const phone = input.from;
 
+    // 2. Identify lead and stage
     const leadExists = input.lead_id && input.lead_id.length > 0;
     const stage = input.lead_stage || null;
-
+    
     // ============================================
-    // FOLLOW-UP RESPONSE HANDLER
+    // FOLLOW-UP RESPONSE HANDLER (Route 8)
     // ============================================
+    
+    // Check if lead is awaiting follow-up response
     const awaitingFollowUp = input.awaiting_followup_response || false;
-
+    
     if (leadExists && awaitingFollowUp && (message === '1' || message === '2')) {
+      console.log('Follow-up response detected!');
+      
       const leadName = input.lead_name || "there";
       const leadPhone = phone;
-      const lastViewedProperty = input.last_viewed_property || "a property";
-
+      const tenantWhatsApp = input.tenant_whatsapp || "";
+      const lastViewedProperty = input.last_viewed_property || "a property"; // Property name from last booking
+      
+      console.log('Last Viewed Property:', lastViewedProperty);
+      
       if (message === '1') {
+        // User is INTERESTED!
+        
+        // Get agent phone from the last booking for this lead
+        let agentPhone = null;
+        try {
+          const recentBookings = await base('Bookings')
+            .select({
+              filterByFormula: `SEARCH("${leadId}", ARRAYJOIN({Lead}, ","))`,
+              sort: [{ field: 'Created', direction: 'desc' }],
+              maxRecords: 1
+            })
+            .firstPage();
+          
+          if (recentBookings.length > 0) {
+            agentPhone = recentBookings[0].get('Agent Phone');
+          }
+        } catch (err) {
+          console.error('Failed to get agent phone:', err);
+        }
+        
         return {
           action: "followup_interested",
           updateFields: {
@@ -27,17 +56,18 @@ async function handleMessage(input) {
             "Conversation Stage": "interested_after_viewing",
             "AwaitingFollowUpResponse": false
           },
-          replyMessage:
-            `Great news!\n\n` +
-            `Our agent will contact you shortly to discuss next steps.\n\n` +
-            `Reply HI anytime to search for more properties.`,
-          agentMessage:
-            `Hot Lead Alert!\n\n` +
-            `${leadName} is interested after their viewing.\n\n` +
-            `Contact them now: ${leadPhone}\n` +
-            `Property viewed: ${lastViewedProperty}`
+          replyMessage: `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`,
+          agentNotification: {
+            agentPhone: agentPhone, // ← Agent's phone
+            message: `🔥 *HOT LEAD ALERT!*\n\n${leadName} is INTERESTED after viewing!\n\nProperty: ${lastViewedProperty}\n\n📞 Contact them ASAP: ${leadPhone}\n\nStrike while the iron is hot! 🎯`,
+            sendTo: tenantWhatsApp, // ← For future use
+            leadName: leadName,
+            leadPhone: leadPhone,
+            propertyName: lastViewedProperty
+          }
         };
       } else if (message === '2') {
+        // User is NOT interested
         return {
           action: "followup_not_interested",
           updateFields: {
@@ -45,27 +75,25 @@ async function handleMessage(input) {
             "Conversation Stage": "not_interested_after_viewing",
             "AwaitingFollowUpResponse": false
           },
-          replyMessage:
-            `Thank you for your feedback.\n\n` +
-            `If you change your mind, just reply HI anytime.\n\n` +
-            `We are always here to help.`
+          replyMessage: `Thank you for your feedback! 🙏\n\nIf you change your mind, just reply HI anytime.\n\nWe're always here to help! 🏡`
         };
       }
     }
+    
+    // ============================================
+    // END FOLLOW-UP HANDLER - Continue normal flow
+    // ============================================
 
-    // ============================================
-    // RECONSTRUCT LEAD OBJECT
-    // ============================================
+    // 3. Reconstruct lead object
     const lead = {
       id: input.lead_id,
       Interest: input.lead_interest,
       Budget: input.lead_budget,
       Location: input.lead_location,
-      Size: input.lead_size,
-      IsOffplan: input.lead_is_offplan,
-      CompletionRange: input.lead_completion_range
+      Size: input.lead_size
     };
 
+    // 4. Response object
     let response = {
       action: "",
       updateFields: {},
@@ -79,11 +107,10 @@ async function handleMessage(input) {
       propertyNumber: 0,
       location: "",
       selectedTime: "",
-      plotSize: "",
-      isOffplan: null,
-      completionRange: null
+      plotSize: ""
     };
 
+    // Tenant configuration
     const botName = input.tenant_bot_name || "PropertyBot";
     const companyName = input.tenant_company_name || "our company";
     const tenantTypes = input.tenant_property_types || "Buy, Rent";
@@ -91,12 +118,12 @@ async function handleMessage(input) {
     function formatOptions(types) {
       return types
         .split(',')
-        .map((t, index) => `${index + 1} - ${t.trim()}`)
+        .map((t, index) => `${index + 1}️⃣ ${t.trim()}`)
         .join('\n');
     }
 
     // ======================================
-    // NEW USER
+    // NEW USER - START CONVERSATION
     // ======================================
     if (!leadExists) {
       response.action = "create";
@@ -110,18 +137,22 @@ async function handleMessage(input) {
 
       const options = formatOptions(tenantTypes);
 
-      response.replyMessage =
-        `Hi! Welcome to *${companyName}* 👋\n\n` +
-        `I am ${botName}, your property assistant.\n\n` +
-        `What are you looking for?\n\n` +
-        `${options}\n\n` +
-        `Reply with the number or name.`;
+      response.replyMessage = 
+`Hi! Welcome to ${companyName} 👋
+
+I'm ${botName}, your property assistant.
+
+What are you looking for?
+
+${options}
+
+Reply with the name or number (e.g., Buy or 1).`;
 
       return response;
     }
 
     // ======================================
-    // GREETING - RESTART
+    // GREETING (RESTART FOR EXISTING USERS)
     // ======================================
     if (message.match(/^(hi|hello|hey|start|helo|restart)$/)) {
       response.action = "update";
@@ -131,12 +162,16 @@ async function handleMessage(input) {
 
       const options = formatOptions(tenantTypes);
 
-      response.replyMessage =
-        `Hi! Welcome back to *${companyName}* 👋\n\n` +
-        `I am ${botName}, your property assistant.\n\n` +
-        `What are you looking for?\n\n` +
-        `${options}\n\n` +
-        `Reply with the number or name.`;
+      response.replyMessage = 
+`Hi! Welcome back to ${companyName} 👋
+
+I'm ${botName}, your property assistant.
+
+What are you looking for?
+
+${options}
+
+Reply with the name or number (e.g., Rent or 2).`;
 
       return response;
     }
@@ -146,7 +181,8 @@ async function handleMessage(input) {
     // ======================================
     if (stage === "asked_buy_or_rent") {
       const typesList = tenantTypes.split(',').map(t => t.trim());
-
+      
+      // Build mapping: number → type and name → type
       const typeMapping = {};
       typesList.forEach((type, index) => {
         typeMapping[(index + 1).toString()] = type;
@@ -158,10 +194,11 @@ async function handleMessage(input) {
       if (!selectedType) {
         const options = formatOptions(tenantTypes);
         response.action = "invalid";
-        response.replyMessage =
-          `Please choose from the options below:\n\n` +
-          `${options}\n\n` +
-          `Reply with the number or name.`;
+        response.replyMessage = `Please choose from the options below:
+
+${options}
+
+Reply with the name or number.`;
         return response;
       }
 
@@ -171,19 +208,21 @@ async function handleMessage(input) {
         "Conversation Stage": "asked_name"
       };
 
-      response.replyMessage =
-        `Great choice! 👍\n\n` +
-        `What is your name?\n\n` +
-        `Just type your name.`;
+      response.replyMessage = `Great choice! 👍
+
+What's your name?
+
+(Just type your name, e.g., Peter or Mary Jane)`;
       return response;
     }
 
     // ======================================
-    // STAGE 2: NAME
+    // STAGE 2: NAME (Enhanced - accepts natural language)
     // ======================================
     if (stage === "asked_name") {
       let name = "";
 
+      // Try to extract name from various formats
       if (message.match(/my name is (.+)/i)) {
         name = message.match(/my name is (.+)/i)[1];
       } else if (message.match(/i am (.+)/i)) {
@@ -193,20 +232,23 @@ async function handleMessage(input) {
       } else if (message.match(/this is (.+)/i)) {
         name = message.match(/this is (.+)/i)[1];
       } else if (message.match(/^[a-zA-Z]{2,}(\s[a-zA-Z]{2,})*$/)) {
-        name = message;
+        name = message; // Direct name input
       }
 
+      // Validate extracted name
       if (!name || name.length < 2) {
         response.action = "invalid";
-        response.replyMessage =
-          `I did not quite catch that.\n\n` +
-          `Please enter your name.\n\n` +
-          `Just your name is enough!`;
+        response.replyMessage = `I didn't quite catch that.
+
+Please enter your name (e.g., John or Mary Jane).
+
+Just your name is enough! 😊`;
         return response;
       }
 
+      // Clean and capitalize
       name = name.trim()
-        .replace(/[^a-zA-Z\s]/g, '')
+        .replace(/[^a-zA-Z\s]/g, '') // Remove special characters
         .split(/\s+/)
         .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join(' ');
@@ -214,124 +256,105 @@ async function handleMessage(input) {
       response.action = "update";
       response.updateFields = {
         "Name": name,
-        "Conversation Stage": "asked_offplan"
+        "Conversation Stage": "asked_budget"
       };
+      
+      response.replyMessage = `Nice to meet you, ${name}! 👋
 
-      response.replyMessage =
-        `Nice to meet you, ${name}! 👋\n\n` +
-        `Are you looking for a ready property or an off-plan development?\n\n` +
-        `1 - Ready (move in immediately)\n` +
-        `2 - Off-Plan (under construction)`;
+What's your budget?
+
+Examples:
+• 500000
+• 5M 
+• 500K 
+
+Just type the amount!`;
       return response;
     }
 
     // ======================================
-    // STAGE 3: OFF-PLAN OR READY
+    // STAGE 3: BUDGET (Enhanced - accepts natural language)
     // ======================================
-    if (stage === "asked_offplan") {
-      const isReady = message === '1' ||
-        message.toLowerCase().includes('ready')
-      const isOffplan = message === '2' ||
-        message.toLowerCase().includes('off-plan') ||
-        message.toLowerCase().includes('offplan') ||
-        message.toLowerCase().includes('off plan')
+    if (stage === "asked_budget") {
+      let budgetStr = message;
 
-      if (!isReady && !isOffplan) {
+      // Extract budget from various formats
+      if (message.match(/budget is (.+)/i)) {
+        budgetStr = message.match(/budget is (.+)/i)[1];
+      } else if (message.match(/i have (.+)/i)) {
+        budgetStr = message.match(/i have (.+)/i)[1];
+      } else if (message.match(/around (.+)/i)) {
+        budgetStr = message.match(/around (.+)/i)[1];
+      } else if (message.match(/about (.+)/i)) {
+        budgetStr = message.match(/about (.+)/i)[1];
+      }
+
+      // Clean: remove everything except numbers, dots, commas, M, K
+      budgetStr = budgetStr.replace(/[^0-9.,mkMK]/g, '').toUpperCase();
+
+      // Validate format
+      if (!budgetStr.match(/^[\d.,]+[MK]?$/)) {
         response.action = "invalid";
-        response.replyMessage =
-          `Please choose one of the options:\n\n` +
-          `1 - Ready (move in immediately)\n` +
-          `2 - Off-Plan (under construction)`;
+        response.replyMessage = `I didn't understand that budget.
+
+Please enter a valid amount:
+• 5000000
+• 5M (5 million)
+• 500K (500 thousand)
+
+Just the number is fine!`;
         return response;
       }
 
-      if (isOffplan) {
-        response.action = "update";
-        response.updateFields = {
-          "Conversation Stage": "asked_completion"
-        };
-        response.isOffplan = true;
-        response.replyMessage =
-          `When do you need it completed by?\n\n` +
-          `1 - By end of 2026\n` +
-          `2 - By end of 2027\n` +
-          `3 - By end of 2028\n` +
-          `4 - 2029 and beyond\n` +
-          `5 - Any completion date`;
-        return response;
+      // Parse budget
+      let budget = budgetStr.replace(/,/g, '');
+      if (budget.includes('M')) {
+        budget = parseFloat(budget) * 1000000;
+      } else if (budget.includes('K')) {
+        budget = parseFloat(budget) * 1000;
+      } else {
+        budget = parseFloat(budget);
       }
 
-      if (isReady) {
-        response.action = "update";
-        response.updateFields = {
-          "Conversation Stage": "asked_location"
-        };
-        response.isOffplan = false;
-        response.replyMessage =
-          `Perfect! Let me check available areas... 🔍`;
-        response.action = "fetch_locations";
-        response.interest = lead.Interest || input.lead_interest;
-        return response;
-      }
-    }
-
-    // ======================================
-    // STAGE 4: COMPLETION DATE (OFF-PLAN ONLY)
-    // ======================================
-    if (stage === "asked_completion") {
-      const validChoices = ['1', '2', '3', '4', '5'];
-
-      if (!validChoices.includes(message)) {
-        response.action = "invalid";
-        response.replyMessage =
-          `Please reply with a number:\n\n` +
-          `1 - By end of 2026\n` +
-          `2 - By end of 2027\n` +
-          `3 - By end of 2028\n` +
-          `4 - 2029 and beyond\n` +
-          `5 - Any completion date`;
-        return response;
-      }
-
-      const completionRanges = {
-        '1': '2026',
-        '2': '2027',
-        '3': '2028',
-        '4': '2029+',
-        '5': 'any'
-      };
+      // Get interest from lead record (in case it was set during intent detection)
+      const interest = lead.Interest || input.lead_interest;
 
       response.action = "fetch_locations";
       response.updateFields = {
+        "Budget": budget.toString(),
         "Conversation Stage": "fetching_locations"
       };
-      response.isOffplan = true;
-      response.completionRange = completionRanges[message];
-      response.interest = lead.Interest || input.lead_interest;
-      response.replyMessage = `Perfect! Let me check available areas... 🔍`;
+
+      response.interest = interest; // ← Pass the interest along!
+      response.replyMessage = "Great! 💰\n\nLet me check available areas... 🔍";
+
       return response;
     }
 
     // ======================================
-    // STAGE 5: LOCATION
+    // STAGE 4: LOCATION (Triggers size fetch)
     // ======================================
     if (stage === "asked_location") {
+      // Accept location in various formats
       let location = message;
 
+      // Clean up common prefixes
       if (message.match(/in (.+)/i)) {
         location = message.match(/in (.+)/i)[1];
       } else if (message.match(/at (.+)/i)) {
         location = message.match(/at (.+)/i)[1];
       }
 
+      // Validate it's mostly letters
       if (!location.match(/[a-zA-Z]{2,}/)) {
         response.action = "invalid";
-        response.replyMessage =
-          `Please choose a location from the list above.\n\n` +
-          `Just type the area name.`;
+        response.replyMessage = `Please choose a location from the list above.
+
+Just type the area name (e.g., Westlands or Karen).`;
         return response;
       }
 
+      // Capitalize properly
       location = location.trim()
         .split(/\s+/)
         .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
@@ -344,154 +367,140 @@ async function handleMessage(input) {
         "Location": location,
         "Conversation Stage": "fetching_sizes"
       };
-
+      
       response.interest = interest;
       response.location = location;
-      response.replyMessage = `Perfect! 📍\n\nChecking what is available in ${location}... 🔍`;
+      
+      response.replyMessage = `Perfect! 📍\n\nChecking what's available in ${location}... 🔍`;
+
       return response;
     }
 
     // ======================================
-    // STAGE 6: SIZE / BEDROOMS
+    // STAGE 5: SIZE (HOUSES)
     // ======================================
     if (stage === "asked_size") {
-      let bedroomsStr = message;
-      let bedrooms = null;
+  let bedroomsStr = message;
+  let bedrooms = null;
 
-      const isStudio = message.match(/stud/i);
+  // Check for studio first
+  const isStudio = message.match(/stud/i);
 
-      if (isStudio) {
-        bedrooms = 0;
-      } else {
-        if (message.match(/(\d+)\s*bed/i)) {
-          bedroomsStr = message.match(/(\d+)\s*bed/i)[1];
-        } else if (message.match(/i (want|need) (\d+)/i)) {
-          bedroomsStr = message.match(/i (want|need) (\d+)/i)[2];
-        } else if (message.match(/^\d+$/)) {
-          bedroomsStr = message;
-        }
-        bedrooms = parseInt(bedroomsStr);
-      }
-
-      if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedrooms > 20) {
-        response.action = "invalid";
-        response.replyMessage =
-          `Please enter the number of bedrooms you need.\n\n` +
-          `Examples: Studio, 1, 2, 3, 4\n\n` +
-          `Just type Studio or the number!`;
-        return response;
-      }
-
-      const finalInterest = lead.Interest || input.lead_interest || "Not specified";
-      const finalLocation = lead.Location || input.lead_location || "Not specified";
-      const displaySize = bedrooms === 0 ? 'Studio' : `${bedrooms} bedroom`;
-
-      response.action = "fetch_budget_ranges";
-      response.updateFields = {
-        "Size": displaySize,
-        "Conversation Stage": "fetching_budget_ranges"
-      };
-
-      response.interest = finalInterest;
-      response.bedrooms = bedrooms;
-      response.requestedBedrooms = bedrooms;
-      response.location = finalLocation;
-      response.replyMessage = `Great choice! Let me check available price ranges... 💰`;
-      return response;
+  if (isStudio) {
+    bedrooms = 0;
+  } else {
+    if (message.match(/(\d+)\s*bed/i)) {
+      bedroomsStr = message.match(/(\d+)\s*bed/i)[1];
+    } else if (message.match(/i (want|need) (\d+)/i)) {
+      bedroomsStr = message.match(/i (want|need) (\d+)/i)[2];
+    } else if (message.match(/^\d+$/)) {
+      bedroomsStr = message;
     }
+    bedrooms = parseInt(bedroomsStr);
+  }
+
+  if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedrooms > 20) {
+    response.action = "invalid";
+    response.replyMessage =
+      `Please enter the number of bedrooms you need.\n\n` +
+      `Examples: Studio, 1, 2, 3, 4\n\n` +
+      `Just type Studio or the number!`;
+    return response;
+  }
+
+  const finalInterest = lead.Interest || input.lead_interest || "Not specified";
+  const finalBudget = lead.Budget || input.lead_budget || "Not specified";
+  const finalLocation = lead.Location || input.lead_location || "Not specified";
+  const displaySize = bedrooms === 0 ? 'Studio' : `${bedrooms} bedroom`;
+
+  response.action = "update";
+  response.updateFields = {
+    "Size": displaySize,
+    "Conversation Stage": "completed",
+    "Status": "Contacted"
+  };
+
+  response.interest = finalInterest;
+  response.bedrooms = bedrooms;
+  response.requestedBedrooms = bedrooms;
+  response.location = finalLocation;
+  response.searchProperties = true;
+
+  response.replyMessage =
+    response.replyMessage =
+  `✅ Got it! Let me find the best matches for you...\n\n` +
+  `📋 Your preferences:\n` +
+  `• Interest: ${finalInterest}\n` +
+  `• Budget: KES ${finalBudget}\n` +
+  `• Location: ${finalLocation}\n` +
+  `• Size: ${displaySize}\n\n` +
+  `Searching properties... 🔍`;
+
+  return response;
+}
 
     // ======================================
-    // STAGE 6B: LAND SIZE
+    // STAGE 5B: LAND SIZE SELECTION
     // ======================================
     if (stage === "asked_land_size") {
-      let plotSize = originalMessage.trim();
+      // Clean plot size input
+      let plotSize = originalMessage.trim(); // Keep original case for plot sizes like "1/4 Acre"
 
+      // Extract from various formats
+      if (message.match(/(\d+x\d+|\d+\/\d+|\d+\s*acre)/i)) {
+        // Already in good format
+      } else if (message.match(/i (want|need) (.+)/i)) {
+        plotSize = message.match(/i (want|need) (.+)/i)[2];
+      }
+
+      // Basic validation
       if (plotSize.length < 2) {
         response.action = "invalid";
-        response.replyMessage =
-          `Please enter the plot size you are interested in.\n\n` +
-          `Examples: 50x100, 1/4 Acre, 1/8\n\n` +
-          `Choose from the options above!`;
+        response.replyMessage = `Please enter the plot size you're interested in.
+
+Examples:
+• 50x100
+• 1/4 Acre
+• 1/8
+
+Choose from the options above!`;
         return response;
       }
 
       const finalInterest = lead.Interest || input.lead_interest || "Land";
+      const finalBudget = lead.Budget || input.lead_budget || "Not specified";
       const finalLocation = lead.Location || input.lead_location || "Not specified";
-
-      response.action = "fetch_budget_ranges";
-      response.updateFields = {
-        "Size": plotSize,
-        "Conversation Stage": "fetching_budget_ranges"
-      };
-
-      response.interest = finalInterest;
-      response.location = finalLocation;
-      response.plotSize = plotSize;
-      response.replyMessage = `Great! Let me check available price ranges... 💰`;
-      return response;
-    }
-
-    // ======================================
-    // STAGE 7: BUDGET SELECTION
-    // ======================================
-    if (stage === "asked_budget") {
-      const validChoices = ['1', '2', '3', '4', '5'];
-
-      if (!validChoices.includes(message)) {
-        response.action = "invalid";
-        response.replyMessage =
-          `Please reply with a number from the options above.`;
-        return response;
-      }
-
-      // Budget ranges are stored in lead.available_slots temporarily
-      // We pass them through the flow
-      const budgetRanges = input.lead_budget_ranges
-        ? JSON.parse(input.lead_budget_ranges)
-        : null;
-
-      let selectedBudget = null;
-
-      if (budgetRanges && budgetRanges[message]) {
-        selectedBudget = budgetRanges[message].max;
-      }
-
-      const finalInterest = lead.Interest || input.lead_interest || "Not specified";
-      const finalBudget = selectedBudget || "Not specified";
-      const finalLocation = lead.Location || input.lead_location || "Not specified";
-      const finalSize = lead.Size || input.lead_size || "Not specified";
 
       response.action = "update";
       response.updateFields = {
-        "Budget": selectedBudget ? selectedBudget.toString() : "any",
+        "Size": plotSize,
         "Conversation Stage": "completed",
         "Status": "Contacted"
       };
 
       response.interest = finalInterest;
       response.location = finalLocation;
+      response.plotSize = plotSize;
       response.searchProperties = true;
 
-      const sizeDisplay = finalSize.toLowerCase().includes('studio')
-        ? 'Studio'
-        : finalSize;
+      response.replyMessage = `✅ Got it! Let me find the best land matches for you...
 
-      response.replyMessage =
-        `✅ Got it! Let me find the best matches for you...\n\n` +
-        `📋 Your preferences:\n` +
-        `• Interest: ${finalInterest}\n` +
-        `• Budget: KES ${Number(selectedBudget || 0).toLocaleString()}\n` +
-        `• Location: ${finalLocation}\n` +
-        `• Size: ${sizeDisplay}\n\n` +
-        `Searching properties... 🔍`;
+📋 Your preferences:
+• Interest: ${finalInterest}
+• Budget: KES ${finalBudget}
+• Location: ${finalLocation}
+• Plot Size: ${plotSize}
+
+Searching properties... 🔍`;
 
       return response;
     }
 
     // ======================================
-    // STAGE 8: PROPERTY SELECTION / BOOKING
+    // STAGE 7: BOOKING REQUEST
     // ======================================
     if (stage === "completed") {
+      // Accept various property selection formats
       let propertyNumber = null;
 
       if (message.match(/property\s*(\d+)/i)) {
@@ -504,9 +513,9 @@ async function handleMessage(input) {
 
       if (!propertyNumber) {
         response.action = "invalid";
-        response.replyMessage =
-          `Please reply with the property number you want to view.\n\n` +
-          `Example: Property1 or just 1`;
+        response.replyMessage = `Please reply with the property number you want to view.
+
+Example: Property1 or just 1`;
         return response;
       }
 
@@ -516,15 +525,16 @@ async function handleMessage(input) {
         "Selected Property Number": propertyNumber
       };
       response.propertyNumber = propertyNumber;
-      response.replyMessage =
-        `Great choice! 🎉\n\nLet me check availability for you... ⏳`;
+      response.replyMessage = `Great choice! 🎉\n\nLet me check availability for you... ⏳`;
+
       return response;
     }
 
     // ======================================
-    // STAGE 9: TIME SLOT SELECTION
+    // STAGE 8: TIME SLOT
     // ======================================
     if (stage === "awaiting_time_slot") {
+      // Extract slot number
       let slotNumber = null;
 
       if (message.match(/slot\s*(\d+)/i)) {
@@ -537,9 +547,9 @@ async function handleMessage(input) {
 
       if (!slotNumber) {
         response.action = "invalid";
-        response.replyMessage =
-          `Please reply with the slot number.\n\n` +
-          `Example: 3 or Slot 3`;
+        response.replyMessage = `Please reply with the slot number.
+
+Example: 3 or Slot 3`;
         return response;
       }
 
@@ -550,12 +560,13 @@ async function handleMessage(input) {
       };
       response.selectedTime = slotNumber;
       response.bookingRequest = true;
-      response.replyMessage = `Creating your booking... ✅`;
+      response.replyMessage = "Creating your booking... ✅";
+
       return response;
     }
 
     // ======================================
-    // CANCEL BOOKING
+    // CANCEL
     // ======================================
     if (stage === "booking_confirmed" && message.match(/cancel/i)) {
       response.action = "cancel_booking";
@@ -568,36 +579,55 @@ async function handleMessage(input) {
     }
 
     // ======================================
-    // DEFAULT CATCH-ALL
+    // DEFAULT (Catch-all for unexpected input)
     // ======================================
     response.action = "invalid";
     response.replyMessage = getHelpMessage(stage);
     return response;
 
     function getHelpMessage(currentStage) {
-      switch (currentStage) {
-        case "asked_buy_or_rent":
-          return `Please choose what you are looking for:\n\n1 - Buy\n2 - Rent\n3 - Land\n\nReply with the number.`;
-        case "asked_name":
-          return `Please enter your name.\n\nJust your first name or full name.`;
-        case "asked_offplan":
-          return `Please choose:\n\n1 - Ready (move in immediately)\n2 - Off-Plan (under construction)`;
-        case "asked_completion":
-          return `Please choose a completion timeline:\n\n1 - By end of 2026\n2 - By end of 2027\n3 - By end of 2028\n4 - 2029 and beyond\n5 - Any completion date`;
-        case "asked_location":
-          return `Please choose a location from the list above.`;
-        case "asked_size":
-          return `Please enter the number of bedrooms.\n\nExamples: Studio, 1, 2, 3`;
-        case "asked_land_size":
-          return `Please enter the plot size.\n\nExamples: 50x100, 1/4 Acre, 1/8`;
-        case "asked_budget":
-          return `Please reply with a number from the budget options above.`;
-        case "awaiting_time_slot":
-          return `Please reply with the slot number.\n\nExample: 1, 2, 3`;
+      switch(currentStage) {
+        case "asked_buy_or_rent": 
+          return `Please choose from the options:
+
+1️⃣ Buy
+2️⃣ Rent
+3️⃣ Land
+
+Reply with the name or number.`;
+        
+        case "asked_name": 
+          return `Please enter your name.
+
+Just your first name or full name (e.g., John or Mary Jane).`;
+        
+        case "asked_budget": 
+          return `Please enter your budget.
+
+Examples:
+• 5000000
+• 5M (5 million)
+• 500K (500 thousand)`;
+        
+        case "asked_location": 
+          return "Please choose a location from the list above.";
+        
+        case "asked_size": 
+          return "Please enter the number of bedrooms (e.g., 1, 2, 3).";
+        
+        case "asked_land_size": 
+          return `Please enter the plot size.
+
+Examples: 50x100, 1/4 Acre, 1/8`;
+        
+        case "awaiting_time_slot": 
+          return "Please reply with the slot number (e.g., 1, 2, 3).";
+        
         case "booking_confirmed":
-          return `Your viewing is confirmed! Reply CANCEL to cancel, or HI to start over.`;
-        default:
-          return `Send HI to start finding your perfect property!`;
+          return "Your viewing is confirmed! Reply CANCEL to cancel, or HI to start over.";
+        
+        default: 
+          return "Hi! Send 'HI' to start finding your perfect property! 🏡";
       }
     }
 
@@ -605,9 +635,7 @@ async function handleMessage(input) {
     console.error("Error in handleMessage:", error);
     return {
       action: "error",
-      replyMessage:
-        `Sorry, something went wrong.\n\n` +
-        `Please try again or send HI to restart.`
+      replyMessage: "Oops! Something went wrong. Please try again or send HI to restart."
     };
   }
 }

@@ -124,7 +124,7 @@ function extractBedrooms(sizeStr) {
 // ============================================
 // Helper: Search properties from Supabase
 // ============================================
-async function searchProperties(tenantId, interest, location, size, budget, isOffplan, completionRange) {
+async function searchProperties(tenantId, interest, location, size, budget) {
   try {
     const normalizedInterest = normalize(interest);
     const normalizedLocation = normalize(location);
@@ -160,30 +160,6 @@ if (budgetNumber && budgetNumber > 0) {
   const flexibleBudget = budgetNumber * 1.2;
   query = query.lte('price', flexibleBudget);
 }
-
-// Add offplan filter
-if (isOffplan === true) {
-  query = query.eq('is_offplan', true)
-
-  // Add completion date range filter
-  if (completionRange && completionRange !== 'any') {
-    if (completionRange === '2026') {
-      query = query.ilike('completion_date', '%2026%')
-    } else if (completionRange === '2027') {
-      query = query.ilike('completion_date', '%2027%')
-    } else if (completionRange === '2028') {
-      query = query.ilike('completion_date', '%2028%')
-    } else if (completionRange === '2029+') {
-      // For 2029 and beyond we exclude 2026 2027 2028
-      query = query.not('completion_date', 'ilike', '%2026%')
-        .not('completion_date', 'ilike', '%2027%')
-        .not('completion_date', 'ilike', '%2028%')
-    }
-  }
-} else if (isOffplan === false) {
-  query = query.eq('is_offplan', false)
-}
-// If isOffplan is null show all properties
 
     if (normalizedInterest === 'Land') {
       const cleanPlotSize = size ? size.replace(/\s+/g, '').toLowerCase() : '';
@@ -299,8 +275,6 @@ router.post('/', async (req, res) => {
       lead_name: lead?.name || null,
       lead_whatsapp: lead?.phone || null,
       last_viewed_property: lead?.last_viewed_property || null,
-      lead_is_offplan: lead?.is_offplan ?? null,
-      lead_completion_range: lead?.completion_range || null,
       awaiting_followup_response: lead?.awaiting_followup_response || false,
       tenant_id: tenant.id,
       tenant_company_name: tenant.company_name,
@@ -342,8 +316,6 @@ router.post('/', async (req, res) => {
       if (result.updateFields?.Location) updateData.location = result.updateFields.Location;
       if (result.updateFields?.Size) updateData.size = result.updateFields.Size;
       if (result.updateFields?.Status) updateData.status = result.updateFields.Status;
-      if (result.isOffplan !== undefined && result.isOffplan !== null) updateData.is_offplan = result.isOffplan;
-      if (result.completionRange) updateData.completion_range = result.completionRange;
 
       if (Object.keys(updateData).length > 0) {
         await supabase.from('leads').update(updateData).eq('id', lead.id);
@@ -360,14 +332,12 @@ router.post('/', async (req, res) => {
 
         console.log('Searching with:', { searchInterest, searchLocation, searchSize });
 
-    const properties = await searchProperties(
+       const properties = await searchProperties(
   tenant.id,
   searchInterest,
   searchLocation,
   searchSize,
-  lead.budget,
-  lead.is_offplan,
-  lead.completion_range
+  lead.budget
 );
 
         if (properties.length > 0) {
@@ -480,27 +450,13 @@ const propertyMessage =
     // ACTION: fetch_locations
     // -----------------------------------------------
     if (result.action === 'fetch_locations' && lead) {
-  const fetchLocUpdate = {
-    conversation_stage: 'fetching_locations'
-  }
-
-  // Save budget if just came from budget stage
-  if (result.updateFields?.Budget) {
-    fetchLocUpdate.budget = result.updateFields.Budget
-  }
-
-  // Save offplan preference and completion range
-  if (result.isOffplan !== undefined) {
-    fetchLocUpdate.is_offplan = result.isOffplan
-  }
-  if (result.completionRange) {
-    fetchLocUpdate.completion_range = result.completionRange
-  }
-
-  await supabase
-    .from('leads')
-    .update(fetchLocUpdate)
-    .eq('id', lead.id);
+      await supabase
+        .from('leads')
+        .update({
+          budget: result.updateFields?.Budget,
+          conversation_stage: 'fetching_locations'
+        })
+        .eq('id', lead.id);
 
       // Send checking message first
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
