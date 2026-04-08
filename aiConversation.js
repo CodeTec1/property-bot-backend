@@ -104,10 +104,13 @@ async function fetchTenantOptions(tenantId, interest, location, isOffplan = null
           options.priceRange = `KES ${Number(prices[0]).toLocaleString()} to KES ${Number(prices[prices.length - 1]).toLocaleString()}`;
         }
 
-        // Completion dates for offplan
+        // Completion dates — filter by is_offplan=true specifically
         const dates = [...new Set(
-          propData.filter(r => r.is_offplan).map(r => r.completion_date).filter(Boolean)
-        )];
+          propData
+            .filter(r => r.is_offplan === true && r.completion_date)
+            .map(r => r.completion_date)
+            .filter(Boolean)
+        )].sort();
         if (dates.length > 0) options.completionDates = dates;
       }
     }
@@ -131,12 +134,13 @@ function getConversationStage(lead) {
   if (!lead?.interest) return 'need_interest';
   if (!lead?.name) return 'need_name';
   if (!lead?.location) return 'need_location';
-  if (!lead?.size) return 'need_size';
+  // Ask offplan BEFORE size so we can filter bedrooms correctly
   if (lead?.interest !== 'Land') {
     const offplanKnown = lead?.is_offplan === true || lead?.is_offplan === false;
     if (!offplanKnown) return 'need_offplan';
     if (lead?.is_offplan === true && !lead?.completion_range) return 'need_completion';
   }
+  if (!lead?.size) return 'need_size';
   if (!lead?.budget) return 'need_budget';
   return 'ready_to_search';
 }
@@ -324,9 +328,9 @@ EXAMPLE: "Which area interests you? We have properties in: ${options.locations?.
 
 ${stage === 'need_size' ? `
 TASK: Ask for number of bedrooms or plot size.
-AVAILABLE IN ${lead?.location?.toUpperCase() || 'THIS AREA'}: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'fetching...'}
-RULE: ONLY mention options from the list above. Do NOT ask about budget here.
-EXAMPLE: "How many bedrooms are you looking for? We have: ${options.bedrooms?.join(', ') || '...'}"` : ''}
+AVAILABLE IN ${lead?.location?.toUpperCase() || 'THIS AREA'} FOR ${lead?.interest?.toUpperCase() || ''} ${lead?.is_offplan === true ? '(OFF-PLAN)' : lead?.is_offplan === false ? '(READY)' : ''}: ${options.bedrooms?.join(', ') || options.plotSizes?.join(', ') || 'fetching...'}
+RULE: ONLY mention options from the list above. Do NOT ask about budget here. Do NOT ask about off-plan here.
+EXAMPLE: "How many bedrooms? In ${lead?.location || 'this area'} we have: ${options.bedrooms?.join(', ') || '...'} available."` : ''}
 
 ${stage === 'need_offplan' ? `
 TASK: Ask if they want a ready property or off-plan.

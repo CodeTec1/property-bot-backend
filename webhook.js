@@ -763,16 +763,15 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // Detect budget — CHANGE: reordered so KES+M patterns checked first
     const budgetPatterns = [
-      { pattern: /kes\s*(\d+\.?\d*)\s*m/i, multiplier: 1000000 },        // KES 10M / KES 10.5M
-      { pattern: /kes\s*(\d+\.?\d*)\s*million/i, multiplier: 1000000 },  // KES 10 million
-      { pattern: /kes\s*(\d+\.?\d*)\s*k/i, multiplier: 1000 },           // KES 500K
-      { pattern: /^(\d+\.?\d*)\s*m$/i, multiplier: 1000000 },            // 10M
-      { pattern: /^(\d+\.?\d*)\s*million/i, multiplier: 1000000 },       // 10 million
-      { pattern: /^(\d+\.?\d*)\s*k$/i, multiplier: 1000 },               // 500K
-      { pattern: /^kes\s*(\d+[\d,]*)/i, multiplier: 1 },                 // KES 10000000
-      { pattern: /^(\d+[\d,]+)$/, multiplier: 1 }                        // 10000000
+      { pattern: /kes\s*(\d+\.?\d*)\s*m/i, multiplier: 1000000 },
+      { pattern: /kes\s*(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
+      { pattern: /kes\s*(\d+\.?\d*)\s*k/i, multiplier: 1000 },
+      { pattern: /(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
+      { pattern: /(\d+\.?\d*)\s*m\b/i, multiplier: 1000000 },
+      { pattern: /(\d+\.?\d*)\s*k\b/i, multiplier: 1000 },
+      { pattern: /^kes\s*([\d,]+)/i, multiplier: 1 },
+      { pattern: /^([\d,]+)$/, multiplier: 1 }
     ];
 
     for (const { pattern, multiplier } of budgetPatterns) {
@@ -833,12 +832,17 @@ router.post('/', async (req, res) => {
 
         quickUpdate.conversation_history = updatedHistory;
 
-        // CHANGE: Use update().select() to get fresh lead in one DB call — no race condition
-        const { data: freshLead } = await supabase
+        // Save the update
+        await supabase
           .from('leads')
           .update(quickUpdate)
-          .eq('id', lead.id)
+          .eq('id', lead.id);
+
+        // Fetch the COMPLETE lead record after update
+        const { data: freshLead } = await supabase
+          .from('leads')
           .select('*')
+          .eq('id', lead.id)
           .single();
 
         console.log('Fresh lead after update:', {
@@ -850,13 +854,13 @@ router.post('/', async (req, res) => {
           completion_range: freshLead?.completion_range
         });
 
+        // CHANGE: Flow order enforced here — must have size before offplan/completion
+        // Budget is always last — only checked after all other fields are set
+      // Use freshLead which now has ALL fields from full select
         const isOffplanSet = freshLead?.is_offplan === true || freshLead?.is_offplan === false;
-
         const completionReady = freshLead?.is_offplan === false ||
           (freshLead?.is_offplan === true && freshLead?.completion_range);
 
-        // CHANGE: Flow order enforced here — must have size before offplan/completion
-        // Budget is always last — only checked after all other fields are set
         const readyToSearch =
           freshLead?.interest &&
           freshLead?.location &&
@@ -864,6 +868,16 @@ router.post('/', async (req, res) => {
           isOffplanSet &&
           completionReady &&
           freshLead?.budget;
+
+        console.log('Ready check:', {
+          interest: freshLead?.interest,
+          location: freshLead?.location,
+          size: freshLead?.size,
+          is_offplan: freshLead?.is_offplan,
+          completion_range: freshLead?.completion_range,
+          budget: freshLead?.budget,
+          readyToSearch
+        });
 
         console.log('Ready to search:', readyToSearch, '| isOffplanSet:', isOffplanSet, '| completionReady:', completionReady);
 
