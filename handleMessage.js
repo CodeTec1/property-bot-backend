@@ -432,38 +432,49 @@ async function handleMessage(input) {
     }
 
     // ======================================
-    // STAGE 7: BUDGET SELECTION
+    // STAGE 7: BUDGET
     // ======================================
     if (stage === "asked_budget") {
-      const validChoices = ['1', '2', '3', '4', '5'];
+      // Parse budget from free text input
+      let budget = null;
+      const msgLower = message.toLowerCase().trim();
 
-      if (!validChoices.includes(message)) {
+      const budgetPatterns = [
+        { pattern: /(\d+\.?\d*)\s*million/i, multiplier: 1000000 },
+        { pattern: /(\d+\.?\d*)\s*m\b/i, multiplier: 1000000 },
+        { pattern: /(\d+\.?\d*)\s*k\b/i, multiplier: 1000 },
+        { pattern: /kes\s*([\d,]+)/i, multiplier: 1 },
+        { pattern: /^([\d,]+)$/, multiplier: 1 }
+      ];
+
+      for (const { pattern, multiplier } of budgetPatterns) {
+        const match = msgLower.match(pattern);
+        if (match) {
+          const amount = parseFloat(match[1].replace(/,/g, '')) * multiplier;
+          if (!isNaN(amount) && amount >= 1000) {
+            budget = amount;
+            break;
+          }
+        }
+      }
+
+      if (!budget) {
         response.action = "invalid";
         response.replyMessage =
-          `Please reply with a number from the options above.`;
+          `Please enter your budget.\n\n` +
+          `Examples: 10M, 15M, KES 10,000,000\n\n` +
+          `Just type the amount!`;
         return response;
       }
 
-      // Budget ranges are stored in lead.available_slots temporarily
-      // We pass them through the flow
-      const budgetRanges = input.lead_budget_ranges
-        ? JSON.parse(input.lead_budget_ranges)
-        : null;
-
-      let selectedBudget = null;
-
-      if (budgetRanges && budgetRanges[message]) {
-        selectedBudget = budgetRanges[message].max;
-      }
-
       const finalInterest = lead.Interest || input.lead_interest || "Not specified";
-      const finalBudget = selectedBudget || "Not specified";
       const finalLocation = lead.Location || input.lead_location || "Not specified";
       const finalSize = lead.Size || input.lead_size || "Not specified";
+      const displaySize = finalSize.toLowerCase().includes('studio') ? 'Studio' : finalSize;
 
       response.action = "update";
       response.updateFields = {
-        "Budget": selectedBudget ? selectedBudget.toString() : "any",
+        "Budget": budget.toString(),
         "Conversation Stage": "completed",
         "Status": "Contacted"
       };
@@ -472,22 +483,18 @@ async function handleMessage(input) {
       response.location = finalLocation;
       response.searchProperties = true;
 
-      const sizeDisplay = finalSize.toLowerCase().includes('studio')
-        ? 'Studio'
-        : finalSize;
-
       response.replyMessage =
         `✅ Got it! Let me find the best matches for you...\n\n` +
         `📋 Your preferences:\n` +
-        `• Interest: ${finalInterest}\n` +
-        `• Budget: KES ${Number(selectedBudget || 0).toLocaleString()}\n` +
+        `• Type: ${finalInterest}\n` +
         `• Location: ${finalLocation}\n` +
-        `• Size: ${sizeDisplay}\n\n` +
+        `• Size: ${displaySize}\n` +
+        `• Budget: KES ${Number(budget).toLocaleString()}\n\n` +
         `Searching properties... 🔍`;
 
       return response;
     }
-
+    
     // ======================================
     // STAGE 8: PROPERTY SELECTION / BOOKING
     // ======================================

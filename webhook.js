@@ -436,14 +436,26 @@ router.post('/', async (req, res) => {
 
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Search properties if needed
-      if (result.searchProperties) {
+     if (result.searchProperties) {
         const searchInterest = updateData.interest || lead.interest;
         const searchLocation = updateData.location || lead.location;
         const searchSize = updateData.size || lead.size;
         const searchBudget = updateData.budget || lead.budget;
-        const searchIsOffplan = updateData.is_offplan ?? lead.is_offplan;
-        const searchCompletionRange = updateData.completion_range || lead.completion_range;
+
+        // Fetch fresh lead to get all saved fields including offplan and completion
+        const { data: freshLeadData } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('id', lead.id)
+          .single();
+
+        const searchIsOffplan = freshLeadData?.is_offplan ?? lead.is_offplan;
+        const searchCompletionRange = freshLeadData?.completion_range || lead.completion_range;
+
+        console.log('Search params:', {
+          searchInterest, searchLocation, searchSize,
+          searchBudget, searchIsOffplan, searchCompletionRange
+        });
 
         console.log('Searching with:', { searchInterest, searchLocation, searchSize, searchBudget, searchIsOffplan, searchCompletionRange });
 
@@ -457,7 +469,7 @@ router.post('/', async (req, res) => {
           searchCompletionRange
         );
 
-        const freshLead = { ...lead, ...updateData };
+        const freshLead = freshLeadData || { ...lead, ...updateData };
         await sendProperties(properties, freshLead, tenant, tenantWhatsApp, from, agentName, agentPhone, cleanLeadPhone, kenyaTime);
       }
 
@@ -578,7 +590,7 @@ router.post('/', async (req, res) => {
       return;
     }
 
-    // -----------------------------------------------
+// -----------------------------------------------
     // ACTION: fetch_budget_ranges
     // -----------------------------------------------
     if (result.action === 'fetch_budget_ranges' && lead) {
@@ -592,6 +604,9 @@ router.post('/', async (req, res) => {
 
       const normalizedInterest = normalize(lead.interest);
       const normalizedLocation = normalize(lead.location || result.location);
+      const currentIsOffplan = lead.is_offplan;
+      const currentCompletion = lead.completion_range;
+      const size = result.updateFields?.Size || lead.size;
 
       let priceQuery = supabase
         .from('properties')
@@ -602,11 +617,9 @@ router.post('/', async (req, res) => {
         .eq('available', true)
         .not('price', 'is', null);
 
-      if (lead.is_offplan === true) priceQuery = priceQuery.eq('is_offplan', true);
-      if (lead.is_offplan === false) priceQuery = priceQuery.eq('is_offplan', false);
+      if (currentIsOffplan === true) priceQuery = priceQuery.eq('is_offplan', true);
+      if (currentIsOffplan === false) priceQuery = priceQuery.eq('is_offplan', false);
 
-      // Filter by bedrooms for accurate price range
-      const size = result.updateFields?.Size || lead.size;
       if (size) {
         const bedroomNum = extractBedrooms(size);
         if (bedroomNum !== null) {
@@ -614,13 +627,11 @@ router.post('/', async (req, res) => {
         }
       }
 
-      // Filter by completion range for offplan
-      const completionRange = lead.completion_range;
-      if (lead.is_offplan === true && completionRange && completionRange !== 'any') {
-        if (completionRange === '2026') priceQuery = priceQuery.ilike('completion_date', '%2026%');
-        else if (completionRange === '2027') priceQuery = priceQuery.ilike('completion_date', '%2027%');
-        else if (completionRange === '2028') priceQuery = priceQuery.ilike('completion_date', '%2028%');
-        else if (completionRange === '2029+') {
+      if (currentIsOffplan === true && currentCompletion && currentCompletion !== 'any') {
+        if (currentCompletion === '2026') priceQuery = priceQuery.ilike('completion_date', '%2026%');
+        else if (currentCompletion === '2027') priceQuery = priceQuery.ilike('completion_date', '%2027%');
+        else if (currentCompletion === '2028') priceQuery = priceQuery.ilike('completion_date', '%2028%');
+        else if (currentCompletion === '2029+') {
           priceQuery = priceQuery
             .not('completion_date', 'ilike', '%2026%')
             .not('completion_date', 'ilike', '%2027%')
@@ -634,46 +645,23 @@ router.post('/', async (req, res) => {
         const prices = priceData.map(r => r.price).filter(p => p > 0).sort((a, b) => a - b);
         const minPrice = prices[0];
         const maxPrice = prices[prices.length - 1];
+        const priceRange = `KES ${Number(minPrice).toLocaleString()} to KES ${Number(maxPrice).toLocaleString()}`;
 
-        // Create 4 smart ranges
-        const spread = maxPrice - minPrice;
-        let rangeText = '';
-
-        if (spread === 0 || prices.length === 1) {
-          rangeText = `1 - KES ${Number(minPrice).toLocaleString()}`;
-        } else {
-          const step = spread / 4;
-          const ranges = {};
-          let count = 1;
-          for (let i = 0; i < 4; i++) {
-            const rMin = Math.floor((minPrice + step * i) / 1000000) * 1000000;
-            const rMax = Math.ceil((minPrice + step * (i + 1)) / 1000000) * 1000000;
-            if (rMin !== rMax) {
-              ranges[count] = { min: rMin, max: rMax };
-              count++;
-            }
-          }
-          ranges[count] = { min: 0, max: 999999999999, label: 'Any budget' };
-
-          // Save ranges temporarily
-          await supabase.from('leads').update({ available_slots: JSON.stringify(ranges) }).eq('id', lead.id);
-
-          rangeText = Object.entries(ranges).map(([k, r]) =>
-            r.label
-              ? `${k} - ${r.label}`
-              : `${k} - KES ${Number(r.min).toLocaleString()} to KES ${Number(r.max).toLocaleString()}`
-          ).join('\n');
-        }
-
-        await supabase.from('leads').update({ conversation_stage: 'asked_budget' }).eq('id', lead.id);
+        await supabase
+          .from('leads')
+          .update({ conversation_stage: 'asked_budget' })
+          .eq('id', lead.id);
 
         await sendMessage(
           tenantWhatsApp,
           from,
-          `What is your budget range? 💰\n\nAvailable price ranges:\n\n${rangeText}\n\nReply with the number that suits you.`
+          `Almost there! 💰\n\n` +
+          `What is your budget?\n\n` +
+          `Properties matching your criteria range from:\n` +
+          `*${priceRange}*\n\n` +
+          `Just type your budget (e.g. 10M, 15M, KES 10,000,000)`
         );
       } else {
-        // No properties found even before budget filter
         await sendMessage(
           tenantWhatsApp,
           from,
