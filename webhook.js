@@ -124,7 +124,7 @@ function extractBedrooms(sizeStr) {
 // ============================================
 // Helper: Search properties from Supabase
 // ============================================
-async function searchProperties(tenantId, interest, location, size, budget) {
+async function searchProperties(tenantId, interest, location, size, budget, isOffplan, completionRange) {
   try {
     const normalizedInterest = normalize(interest);
     const normalizedLocation = normalize(location);
@@ -161,6 +161,16 @@ if (budgetNumber && budgetNumber > 0) {
   query = query.lte('price', flexibleBudget);
 }
 
+// Offplan filter
+    if (isOffplan === true) {
+      query = query.eq('is_offplan', true);
+      if (completionRange && completionRange !== 'any') {
+        query = query.ilike('completion_date', `%${completionRange}%`);
+      }
+    } else if (isOffplan === false) {
+      query = query.eq('is_offplan', false);
+    }
+    
     if (normalizedInterest === 'Land') {
       const cleanPlotSize = size ? size.replace(/\s+/g, '').toLowerCase() : '';
       if (cleanPlotSize) {
@@ -276,6 +286,8 @@ router.post('/', async (req, res) => {
       lead_whatsapp: lead?.phone || null,
       last_viewed_property: lead?.last_viewed_property || null,
       awaiting_followup_response: lead?.awaiting_followup_response || false,
+      lead_is_offplan: lead?.is_offplan ?? null,
+      lead_completion_range: lead?.completion_range || null,
       tenant_id: tenant.id,
       tenant_company_name: tenant.company_name,
       tenant_bot_name: tenant.bot_name,
@@ -317,6 +329,13 @@ router.post('/', async (req, res) => {
       if (result.updateFields?.Size) updateData.size = result.updateFields.Size;
       if (result.updateFields?.Status) updateData.status = result.updateFields.Status;
 
+      if (result.isOffplan !== null && result.isOffplan !== undefined) {
+        updateData.is_offplan = result.isOffplan;
+      }
+      if (result.updateFields?.CompletionRange) {
+        updateData.completion_range = result.updateFields.CompletionRange;
+      }
+
       if (Object.keys(updateData).length > 0) {
         await supabase.from('leads').update(updateData).eq('id', lead.id);
       }
@@ -332,13 +351,15 @@ router.post('/', async (req, res) => {
 
         console.log('Searching with:', { searchInterest, searchLocation, searchSize });
 
-       const properties = await searchProperties(
-  tenant.id,
-  searchInterest,
-  searchLocation,
-  searchSize,
-  lead.budget
-);
+    const properties = await searchProperties(
+          tenant.id,
+          searchInterest,
+          searchLocation,
+          searchSize,
+          updateData.budget || lead.budget,
+          updateData.is_offplan ?? lead.is_offplan,
+          updateData.completion_range || lead.completion_range
+        );
 
         if (properties.length > 0) {
           const searchResultsToSave = properties.map((p, i) => ({
@@ -576,6 +597,88 @@ nextStage = 'asked_size';
           `Phone: ${agentPhone || 'N/A'}\n\n` +
           `You can also reply HI to start a new search.`
         );
+      }
+      return;
+    }
+
+    // -----------------------------------------------
+    // ACTION: fetch_completion_dates
+    // -----------------------------------------------
+    if (result.action === 'fetch_completion_dates' && lead) {
+      const completionUpdate = {
+        conversation_stage: 'fetching_completion',
+        is_offplan: true
+      };
+      await supabase.from('leads').update(completionUpdate).eq('id', lead.id);
+      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+      const normalizedInterest = normalize(lead.interest);
+      const normalizedLocation = normalize(lead.location);
+
+      let dateQuery = supabase
+        .from('properties')
+        .select('completion_date')
+        .eq('tenant_id', tenant.id)
+        .ilike('type', normalizedInterest)
+        .ilike('location', normalizedLocation)
+        .eq('available', true)
+        .eq('is_offplan', true)
+        .not('completion_date', 'is', null);
+
+      // Filter by bedrooms if known
+      if (lead.size) {
+        const bedroomNum = extractBedrooms(lead.size);
+        if (bedroomNum !== null) {
+          dateQuery = dateQuery.eq('bedrooms', bedroomNum);
+        }
+      }
+
+      // Filter by budget if known
+      if (lead.budget) {
+        const budgetNum = parseFloat(lead.budget);
+        if (!isNaN(budgetNum) && budgetNum > 0) {
+          dateQuery = dateQuery.lte('price', budgetNum * 1.2);
+        }
+      }
+
+      const { data: dateData } = await dateQuery;
+
+      if (dateData && dateData.length > 0) {
+        const dates = [...new Set(
+          dateData.map(r => r.completion_date).filter(Boolean)
+        )].sort();
+
+        const formatted = dates.map((d, i) => `${i + 1}️⃣ ${d}`).join('\n');
+
+        await supabase
+          .from('leads')
+          .update({ conversation_stage: 'asked_completion' })
+          .eq('id', lead.id);
+
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `When would you like the property completed?\n\n` +
+          `Available completion dates:\n\n${formatted}\n\n` +
+          `Just type the date or the number.`
+        );
+      } else {
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Sorry, no off-plan properties found matching your criteria.\n\n` +
+          `Our agent will contact you shortly:\n` +
+          `Agent: ${agentName}\n` +
+          `Phone: ${agentPhone || 'N/A'}\n\n` +
+          `Reply HI to start a new search.`
+        );
+        if (agentPhone) {
+          await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.NO_PROPERTY_FOUND, {
+            "1": lead.name || 'Unknown',
+            "2": cleanLeadPhone,
+            "3": kenyaTime
+          });
+        }
       }
       return;
     }

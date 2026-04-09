@@ -84,13 +84,13 @@ async function handleMessage(input) {
     // END FOLLOW-UP HANDLER - Continue normal flow
     // ============================================
 
-    // 3. Reconstruct lead object
     const lead = {
       id: input.lead_id,
       Interest: input.lead_interest,
       Budget: input.lead_budget,
       Location: input.lead_location,
-      Size: input.lead_size
+      Size: input.lead_size,
+      IsOffplan: input.lead_is_offplan ?? null
     };
 
     // 4. Response object
@@ -255,20 +255,16 @@ Just your name is enough! 😊`;
 
       response.action = "update";
       response.updateFields = {
-        "Name": name,
-        "Conversation Stage": "asked_budget"
+        "Budget": budget.toString(),
+        "Conversation Stage": "asked_offplan"
       };
-      
-      response.replyMessage = `Nice to meet you, ${name}! 👋
 
-What's your budget?
+      response.replyMessage =
+        `Great! 💰\n\n` +
+        `Are you looking for a ready property or an off-plan development?\n\n` +
+        `1️⃣ Ready (move in immediately)\n` +
+        `2️⃣ Off-Plan (under construction)`;
 
-Examples:
-• 500000
-• 5M 
-• 500K 
-
-Just type the amount!`;
       return response;
     }
 
@@ -328,6 +324,105 @@ Just the number is fine!`;
       response.interest = interest; // ← Pass the interest along!
       response.replyMessage = "Great! 💰\n\nLet me check available areas... 🔍";
 
+      return response;
+    }
+
+    // ======================================
+    // STAGE 5B: OFFPLAN OR READY
+    // ======================================
+    if (stage === "asked_offplan") {
+      const isReady = message === '1' ||
+        message.includes('ready') ||
+        message.includes('move in');
+
+      const isOffplan = message === '2' ||
+        message.includes('off-plan') ||
+        message.includes('offplan') ||
+        message.includes('off plan') ||
+        message.includes('under construction');
+
+      if (!isReady && !isOffplan) {
+        response.action = "invalid";
+        response.replyMessage =
+          `Please choose one of the options:\n\n` +
+          `1️⃣ Ready (move in immediately)\n` +
+          `2️⃣ Off-Plan (under construction)`;
+        return response;
+      }
+
+      if (isReady) {
+        response.action = "update";
+        response.updateFields = {
+          "Conversation Stage": "completed",
+          "Status": "Contacted"
+        };
+        response.isOffplan = false;
+        response.searchProperties = true;
+
+        const finalInterest = lead.Interest || input.lead_interest || "Not specified";
+        const finalBudget = lead.Budget || input.lead_budget || "Not specified";
+        const finalLocation = lead.Location || input.lead_location || "Not specified";
+        const finalSize = lead.Size || input.lead_size || "Not specified";
+        const displaySize = finalSize.toLowerCase().includes('studio') ? 'Studio' : finalSize;
+
+        response.replyMessage =
+          `✅ Got it! Let me find the best matches for you...\n\n` +
+          `📋 Your preferences:\n` +
+          `• Type: ${finalInterest}\n` +
+          `• Location: ${finalLocation}\n` +
+          `• Size: ${displaySize}\n` +
+          `• Budget: KES ${finalBudget}\n` +
+          `• Ready property\n\n` +
+          `Searching properties... 🔍`;
+        return response;
+      }
+
+      if (isOffplan) {
+        response.action = "fetch_completion_dates";
+        response.updateFields = {
+          "Conversation Stage": "fetching_completion"
+        };
+        response.isOffplan = true;
+        response.replyMessage = `Great! Let me check available completion dates... 🔍`;
+        return response;
+      }
+    }
+
+    // ======================================
+    // STAGE 5C: COMPLETION DATE (Off-plan only)
+    // ======================================
+    if (stage === "asked_completion") {
+      const completionInput = originalMessage.trim();
+
+      if (!completionInput || completionInput.length < 2) {
+        response.action = "invalid";
+        response.replyMessage = `Please choose a completion date from the options above.`;
+        return response;
+      }
+
+      const finalInterest = lead.Interest || input.lead_interest || "Not specified";
+      const finalBudget = lead.Budget || input.lead_budget || "Not specified";
+      const finalLocation = lead.Location || input.lead_location || "Not specified";
+      const finalSize = lead.Size || input.lead_size || "Not specified";
+      const displaySize = finalSize.toLowerCase().includes('studio') ? 'Studio' : finalSize;
+
+      response.action = "update";
+      response.updateFields = {
+        "CompletionRange": completionInput,
+        "Conversation Stage": "completed",
+        "Status": "Contacted"
+      };
+      response.searchProperties = true;
+
+      response.replyMessage =
+        `✅ Got it! Let me find the best matches for you...\n\n` +
+        `📋 Your preferences:\n` +
+        `• Type: ${finalInterest}\n` +
+        `• Location: ${finalLocation}\n` +
+        `• Size: ${displaySize}\n` +
+        `• Budget: KES ${finalBudget}\n` +
+        `• Completion: ${completionInput}\n\n` +
+        `Searching properties... 🔍`;
       return response;
     }
 
@@ -416,26 +511,14 @@ Just type the area name (e.g., Westlands or Karen).`;
   response.action = "update";
   response.updateFields = {
     "Size": displaySize,
-    "Conversation Stage": "completed",
-    "Status": "Contacted"
+    "Conversation Stage": "asked_budget"
   };
-
-  response.interest = finalInterest;
   response.bedrooms = bedrooms;
-  response.requestedBedrooms = bedrooms;
-  response.location = finalLocation;
-  response.searchProperties = true;
-
   response.replyMessage =
-    response.replyMessage =
-  `✅ Got it! Let me find the best matches for you...\n\n` +
-  `📋 Your preferences:\n` +
-  `• Interest: ${finalInterest}\n` +
-  `• Budget: KES ${finalBudget}\n` +
-  `• Location: ${finalLocation}\n` +
-  `• Size: ${displaySize}\n\n` +
-  `Searching properties... 🔍`;
-
+    `Perfect! 🛏\n\n` +
+    `What is your budget?\n\n` +
+    `Examples:\n• 5M\n• 10M\n• KES 5,000,000\n\n` +
+    `Just type the amount!`;
   return response;
 }
 
