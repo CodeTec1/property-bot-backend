@@ -170,7 +170,7 @@ if (budgetNumber && budgetNumber > 0) {
     } else if (isOffplan === false) {
       query = query.eq('is_offplan', false);
     }
-    
+
     if (normalizedInterest === 'Land') {
       const cleanPlotSize = size ? size.replace(/\s+/g, '').toLowerCase() : '';
       if (cleanPlotSize) {
@@ -471,12 +471,13 @@ const propertyMessage =
     // ACTION: fetch_locations
     // -----------------------------------------------
     if (result.action === 'fetch_locations' && lead) {
+      const locUpdate = { conversation_stage: 'fetching_locations' };
+      if (result.updateFields?.Budget) locUpdate.budget = result.updateFields.Budget;
+      if (result.updateFields?.Name) locUpdate.name = result.updateFields.Name;
+
       await supabase
         .from('leads')
-        .update({
-          budget: result.updateFields?.Budget,
-          conversation_stage: 'fetching_locations'
-        })
+        .update(locUpdate)
         .eq('id', lead.id);
 
       // Send checking message first

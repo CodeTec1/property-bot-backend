@@ -303,14 +303,17 @@ Just the number is fine!`;
       // Get interest from lead record (in case it was set during intent detection)
       const interest = lead.Interest || input.lead_interest;
 
-      response.action = "fetch_locations";
+      response.action = "update";
       response.updateFields = {
         "Budget": budget.toString(),
-        "Conversation Stage": "fetching_locations"
+        "Conversation Stage": "asked_offplan"
       };
 
-      response.interest = interest; // ← Pass the interest along!
-      response.replyMessage = "Great! 💰\n\nLet me check available areas... 🔍";
+      response.replyMessage =
+        `Great! 💰\n\n` +
+        `Are you looking for a ready property or an off-plan development?\n\n` +
+        `1️⃣ Ready (move in immediately)\n` +
+        `2️⃣ Off-Plan (under construction)`;
 
       return response;
     }
