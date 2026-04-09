@@ -217,12 +217,11 @@ What's your name?
     }
 
     // ======================================
-    // STAGE 2: NAME (Enhanced - accepts natural language)
+    // STAGE 2: NAME
     // ======================================
     if (stage === "asked_name") {
       let name = "";
 
-      // Try to extract name from various formats
       if (message.match(/my name is (.+)/i)) {
         name = message.match(/my name is (.+)/i)[1];
       } else if (message.match(/i am (.+)/i)) {
@@ -232,42 +231,31 @@ What's your name?
       } else if (message.match(/this is (.+)/i)) {
         name = message.match(/this is (.+)/i)[1];
       } else if (message.match(/^[a-zA-Z]{2,}(\s[a-zA-Z]{2,})*$/)) {
-        name = message; // Direct name input
+        name = message;
       }
 
-      // Validate extracted name
       if (!name || name.length < 2) {
         response.action = "invalid";
-        response.replyMessage = `I didn't quite catch that.
-
-Please enter your name (e.g., John or Mary Jane).
-
-Just your name is enough! 😊`;
+        response.replyMessage = `I didn't quite catch that.\n\nPlease enter your name (e.g., John or Mary Jane).\n\nJust your name is enough! 😊`;
         return response;
       }
 
-      // Clean and capitalize
       name = name.trim()
-        .replace(/[^a-zA-Z\s]/g, '') // Remove special characters
+        .replace(/[^a-zA-Z\s]/g, '')
         .split(/\s+/)
         .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join(' ');
 
-      response.action = "update";
+      response.action = "fetch_locations";
       response.updateFields = {
-        "Budget": budget.toString(),
-        "Conversation Stage": "asked_offplan"
+        "Name": name,
+        "Conversation Stage": "fetching_locations"
       };
-
-      response.replyMessage =
-        `Great! 💰\n\n` +
-        `Are you looking for a ready property or an off-plan development?\n\n` +
-        `1️⃣ Ready (move in immediately)\n` +
-        `2️⃣ Off-Plan (under construction)`;
-
+      response.interest = lead.Interest || input.lead_interest;
+      response.replyMessage = `Nice to meet you, ${name}! 👋\n\nLet me check available areas... 🔍`;
       return response;
     }
-
+    
     // ======================================
     // STAGE 3: BUDGET (Enhanced - accepts natural language)
     // ======================================
