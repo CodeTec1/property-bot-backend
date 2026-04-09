@@ -382,10 +382,10 @@ Just the number is fine!`;
     // ======================================
     // STAGE 5C: COMPLETION DATE (Off-plan only)
     // ======================================
-  if (stage === "asked_completion") {
+    if (stage === "asked_completion") {
       const completionInput = originalMessage.trim();
 
-      if (!completionInput || completionInput.length < 1) {
+      if (!completionInput || completionInput.length < 2) {
         response.action = "invalid";
         response.replyMessage = `Please choose a completion date from the options above.`;
         return response;
@@ -411,7 +411,7 @@ Just the number is fine!`;
         `• Type: ${finalInterest}\n` +
         `• Location: ${finalLocation}\n` +
         `• Size: ${displaySize}\n` +
-        `• Budget: KES ${Number(finalBudget).toLocaleString()}\n` +
+        `• Budget: KES ${finalBudget}\n` +
         `• Completion: ${completionInput}\n\n` +
         `Searching properties... 🔍`;
       return response;
@@ -506,9 +506,8 @@ Just type the area name (e.g., Westlands or Karen).`;
   };
   response.bedrooms = bedrooms;
   response.replyMessage =
-    `Perfect! 🛏\n\n` +
-    `What is your budget?\n\n` +
-    `Examples:\n• 5M\n• 10M\n• KES 5,000,000\n\n` +
+    `Perfect! What is your budget in Ksh?\n\n` +
+    `Examples:\n• 50000\n• 10M\n• 500k\n\n` +
     `Just type the amount!`;
   return response;
 }
