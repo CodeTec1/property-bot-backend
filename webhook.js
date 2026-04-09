@@ -78,6 +78,13 @@ async function sendTemplateToAgent(tenantWhatsApp, agentPhone, templateSid, vari
       return;
     }
 
+    console.log('Sending template to agent:', {
+      from: tenantWhatsApp,
+      to: agentPhone,
+      templateSid,
+      variables
+    });
+
     const agentWhatsApp = agentPhone.startsWith('whatsapp:')
       ? agentPhone
       : `whatsapp:${agentPhone}`;
@@ -672,6 +679,159 @@ nextStage = 'asked_size';
           `Agent: ${agentName}\n` +
           `Phone: ${agentPhone || 'N/A'}\n\n` +
           `Reply HI to start a new search.`
+        );
+        if (agentPhone) {
+          await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.NO_PROPERTY_FOUND, {
+            "1": lead.name || 'Unknown',
+            "2": cleanLeadPhone,
+            "3": kenyaTime
+          });
+        }
+      }
+      return;
+    }
+
+    // -----------------------------------------------
+    // ACTION: resolve_completion_number
+    // -----------------------------------------------
+    if (result.action === 'resolve_completion_number' && lead) {
+      const choiceNum = parseInt(result.updateFields?.CompletionNumber);
+
+      // Re-fetch the available dates to resolve the number
+      const normalizedInterest = normalize(lead.interest);
+      const normalizedLocation = normalize(lead.location);
+
+      let dateQuery = supabase
+        .from('properties')
+        .select('completion_date')
+        .eq('tenant_id', tenant.id)
+        .ilike('type', normalizedInterest)
+        .ilike('location', normalizedLocation)
+        .eq('available', true)
+        .eq('is_offplan', true)
+        .not('completion_date', 'is', null);
+
+      if (lead.size) {
+        const bedroomNum = extractBedrooms(lead.size);
+        if (bedroomNum !== null) dateQuery = dateQuery.eq('bedrooms', bedroomNum);
+      }
+      if (lead.budget) {
+        const budgetNum = parseFloat(lead.budget);
+        if (!isNaN(budgetNum) && budgetNum > 0) {
+          dateQuery = dateQuery.lte('price', budgetNum * 1.2);
+        }
+      }
+
+      const { data: dateData } = await dateQuery;
+      const dates = [...new Set(
+        (dateData || []).map(r => r.completion_date).filter(Boolean)
+      )].sort();
+
+      const selectedDate = dates[choiceNum - 1];
+
+      if (!selectedDate) {
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Please choose a number from 1 to ${dates.length}.\n\nOr type the date directly.`
+        );
+        return;
+      }
+
+      // Save and search
+      const finalInterest = lead.interest || 'Not specified';
+      const finalLocation = lead.location || 'Not specified';
+      const finalSize = lead.size || 'Not specified';
+      const finalBudget = lead.budget || 'Not specified';
+      const displaySize = finalSize.toLowerCase().includes('studio') ? 'Studio' : finalSize;
+
+      await supabase
+        .from('leads')
+        .update({
+          completion_range: selectedDate,
+          conversation_stage: 'completed',
+          status: 'Contacted'
+        })
+        .eq('id', lead.id);
+
+      await sendMessage(
+        tenantWhatsApp,
+        from,
+        `✅ Got it! Let me find the best matches for you...\n\n` +
+        `📋 Your preferences:\n` +
+        `• Type: ${finalInterest}\n` +
+        `• Location: ${finalLocation}\n` +
+        `• Size: ${displaySize}\n` +
+        `• Budget: KES ${Number(finalBudget).toLocaleString()}\n` +
+        `• Completion: ${selectedDate}\n\n` +
+        `Searching properties... 🔍`
+      );
+
+      const properties = await searchProperties(
+        tenant.id,
+        finalInterest,
+        finalLocation,
+        finalSize,
+        finalBudget,
+        true,
+        selectedDate
+      );
+
+      const freshLead = { ...lead, completion_range: selectedDate, conversation_stage: 'completed' };
+
+      if (properties.length > 0) {
+        const searchResultsToSave = properties.map((p, i) => ({
+          number: i + 1,
+          id: p.id,
+          name: p.property_name,
+          price: p.price,
+          location: p.location,
+          address: p.address,
+          bedrooms: p.bedrooms,
+          plot_size: p.plot_size,
+          type: p.type,
+          photo_url: p.photo_url
+        }));
+
+        await supabase
+          .from('leads')
+          .update({ search_results: searchResultsToSave })
+          .eq('id', lead.id);
+
+        for (let i = 0; i < properties.length; i++) {
+          const property = properties[i];
+          try {
+            const sizeText = property.type === 'Land'
+              ? `${property.plot_size}`
+              : property.bedrooms === 0 ? `Studio`
+              : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
+            const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
+            const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
+
+            const propertyMessage =
+              `🏢 *PROPERTY ${i + 1}*\n──────────\n\n` +
+              (property.project_name ? `*${property.project_name}*\n` : '') +
+              `*${property.property_name}*\n\n` +
+              `📍 ${property.location}\n` +
+              `💰 ${priceFormatted}\n` +
+              `🛏 ${sizeText}${sqmText}\n` +
+              (property.completion_date ? `🏗 Completion: ${property.completion_date}\n` : '') +
+              `📮 ${property.address}\n` +
+              (property.description ? `\n${property.description}\n` : '') +
+              `\n──────────\nReply *Property${i + 1}* to book a viewing`;
+
+            await sendMessage(tenantWhatsApp, from, propertyMessage, property.photo_url || null);
+            if (i < properties.length - 1) await delay(2000);
+          } catch (err) {
+            console.error(`Error sending property ${i + 1}:`, err.message);
+          }
+        }
+      } else {
+        await sendMessage(
+          tenantWhatsApp,
+          from,
+          `Sorry, no properties found matching your criteria.\n\n` +
+          `Agent: ${agentName}\nPhone: ${agentPhone || 'N/A'}\n\nReply HI to start over.`
         );
         if (agentPhone) {
           await sendTemplateToAgent(tenantWhatsApp, agentPhone, TEMPLATES.NO_PROPERTY_FOUND, {

@@ -382,7 +382,7 @@ Just the number is fine!`;
     // ======================================
     // STAGE 5C: COMPLETION DATE (Off-plan only)
     // ======================================
-    if (stage === "asked_completion") {
+   if (stage === "asked_completion") {
       const completionInput = originalMessage.trim();
 
       if (!completionInput || completionInput.length < 2) {
@@ -390,6 +390,49 @@ Just the number is fine!`;
         response.replyMessage = `Please choose a completion date from the options above.`;
         return response;
       }
+
+      // Handle number selection - map to actual date from stored options
+      // Also handle short formats like "Dec 2028", "jan 28", "Dec", "2027" etc
+      let resolvedCompletion = completionInput;
+
+      // If user typed a number, we resolve it in webhook using stored dates
+      const isNumber = /^\d+$/.test(completionInput.trim());
+      if (isNumber) {
+        response.action = "resolve_completion_number";
+        response.updateFields = {
+          "CompletionNumber": completionInput.trim()
+        };
+        response.replyMessage = ``;
+        return response;
+      }
+
+      // Normalize short month formats to full dates
+      const monthMap = {
+        'jan': 'January', 'feb': 'February', 'mar': 'March',
+        'apr': 'April', 'may': 'May', 'jun': 'June',
+        'jul': 'July', 'aug': 'August', 'sep': 'September',
+        'oct': 'October', 'nov': 'November', 'dec': 'December'
+      };
+
+      let normalized = completionInput.toLowerCase();
+
+      // Replace short month names with full names
+      for (const [short, full] of Object.entries(monthMap)) {
+        normalized = normalized.replace(new RegExp(short, 'gi'), full);
+      }
+
+      // Handle 2-digit year like "28" -> "2028"
+      normalized = normalized.replace(/\b(\d{2})\b/g, (match) => {
+        const num = parseInt(match);
+        if (num >= 24 && num <= 35) return `20${match}`;
+        return match;
+      });
+
+      // Capitalize properly
+      resolvedCompletion = normalized
+        .split(' ')
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
 
       const finalInterest = lead.Interest || input.lead_interest || "Not specified";
       const finalBudget = lead.Budget || input.lead_budget || "Not specified";
@@ -399,7 +442,7 @@ Just the number is fine!`;
 
       response.action = "update";
       response.updateFields = {
-        "CompletionRange": completionInput,
+        "CompletionRange": resolvedCompletion,
         "Conversation Stage": "completed",
         "Status": "Contacted"
       };
@@ -411,8 +454,8 @@ Just the number is fine!`;
         `• Type: ${finalInterest}\n` +
         `• Location: ${finalLocation}\n` +
         `• Size: ${displaySize}\n` +
-        `• Budget: KES ${finalBudget}\n` +
-        `• Completion: ${completionInput}\n\n` +
+        `• Budget: KES ${Number(finalBudget).toLocaleString()}\n` +
+        `• Completion: ${resolvedCompletion}\n\n` +
         `Searching properties... 🔍`;
       return response;
     }
