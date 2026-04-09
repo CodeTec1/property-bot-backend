@@ -269,6 +269,7 @@ router.post('/', async (req, res) => {
     const cleanLeadPhone = lead?.phone
       ? lead.phone.replace('whatsapp:', '').trim()
       : from.replace('whatsapp:', '').trim();
+    console.log('Agent found:', agentName, agentPhone);
 
     // Get current Kenya time for templates
     const now = new Date();
@@ -340,7 +341,53 @@ router.post('/', async (req, res) => {
         updateData.is_offplan = result.isOffplan;
       }
       if (result.updateFields?.CompletionRange) {
-        updateData.completion_range = result.updateFields.CompletionRange;
+        let completionValue = result.updateFields.CompletionRange;
+
+        // If user typed a number, resolve it to actual date
+        if (/^\d+$/.test(completionValue.trim())) {
+          const { data: leadWithDates } = await supabase
+            .from('leads')
+            .select('last_search_results')
+            .eq('id', lead.id)
+            .single();
+
+          const storedDates = leadWithDates?.last_search_results
+            ? JSON.parse(leadWithDates.last_search_results)
+            : [];
+
+          const choiceIndex = parseInt(completionValue) - 1;
+          if (storedDates[choiceIndex]) {
+            completionValue = storedDates[choiceIndex];
+          }
+        } else {
+          // Normalize short formats: Dec 2028, jan 28, Dec-2028 etc
+          const monthMap = {
+            'jan': 'January', 'feb': 'February', 'mar': 'March',
+            'apr': 'April', 'may': 'May', 'jun': 'June',
+            'jul': 'July', 'aug': 'August', 'sep': 'September',
+            'oct': 'October', 'nov': 'November', 'dec': 'December'
+          };
+
+          let normalized = completionValue.toLowerCase().replace(/-/g, ' ');
+
+          for (const [short, full] of Object.entries(monthMap)) {
+            normalized = normalized.replace(new RegExp(`\\b${short}\\b`, 'gi'), full);
+          }
+
+          // Handle 2-digit year
+          normalized = normalized.replace(/\b(\d{2})\b/g, (match) => {
+            const num = parseInt(match);
+            if (num >= 24 && num <= 35) return `20${match}`;
+            return match;
+          });
+
+          completionValue = normalized
+            .split(' ')
+            .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(' ');
+        }
+
+        updateData.completion_range = completionValue;
       }
 
       if (Object.keys(updateData).length > 0) {
@@ -349,6 +396,32 @@ router.post('/', async (req, res) => {
 
       // Send reply first
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+      // Make sure we use the most current values
+        const { data: latestLead } = await supabase
+          .from('leads')
+          .select('is_offplan, completion_range, budget, interest, location, size')
+          .eq('id', lead.id)
+          .single();
+
+        console.log('Searching with:', {
+          searchInterest,
+          searchLocation,
+          searchSize,
+          budget: updateData.budget || latestLead?.budget || lead.budget,
+          isOffplan: updateData.is_offplan ?? latestLead?.is_offplan,
+          completionRange: updateData.completion_range || latestLead?.completion_range
+        });
+
+        const properties = await searchProperties(
+          tenant.id,
+          searchInterest,
+          searchLocation,
+          searchSize,
+          updateData.budget || latestLead?.budget || lead.budget,
+          updateData.is_offplan ?? latestLead?.is_offplan,
+          updateData.completion_range || latestLead?.completion_range
+        );
 
       // Then search properties if needed
     if (result.searchProperties) {
@@ -658,9 +731,13 @@ nextStage = 'asked_size';
 
         const formatted = dates.map((d, i) => `${i + 1}️⃣ ${d}`).join('\n');
 
+        // Save dates list so we can resolve number selection later
         await supabase
           .from('leads')
-          .update({ conversation_stage: 'asked_completion' })
+          .update({
+            conversation_stage: 'asked_completion',
+            last_search_results: JSON.stringify(dates)
+          })
           .eq('id', lead.id);
 
         await sendMessage(
@@ -670,6 +747,7 @@ nextStage = 'asked_size';
           `Available completion dates:\n\n${formatted}\n\n` +
           `Just type the date or the number.`
         );
+
       } else {
         await sendMessage(
           tenantWhatsApp,
