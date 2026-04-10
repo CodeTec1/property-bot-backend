@@ -340,7 +340,28 @@ router.post('/', async (req, res) => {
         updateData.is_offplan = result.isOffplan;
       }
       if (result.updateFields?.CompletionRange) {
-        updateData.completion_range = result.updateFields.CompletionRange;
+        let completionValue = result.updateFields.CompletionRange;
+
+        // If user typed a number, resolve it to actual date from stored list
+        if (/^\d+$/.test(completionValue.trim())) {
+          const { data: leadWithDates } = await supabase
+            .from('leads')
+            .select('last_search_results')
+            .eq('id', lead.id)
+            .single();
+
+          try {
+            const storedDates = JSON.parse(leadWithDates?.last_search_results || '[]');
+            const index = parseInt(completionValue) - 1;
+            if (storedDates[index]) {
+              completionValue = storedDates[index];
+            }
+          } catch (e) {
+            console.error('Error parsing stored dates:', e);
+          }
+        }
+
+        updateData.completion_range = completionValue;
       }
 
       if (Object.keys(updateData).length > 0) {
@@ -660,7 +681,10 @@ nextStage = 'asked_size';
 
         await supabase
           .from('leads')
-          .update({ conversation_stage: 'asked_completion' })
+          .update({
+            conversation_stage: 'asked_completion',
+            last_search_results: JSON.stringify(dates)
+          })
           .eq('id', lead.id);
 
         await sendMessage(

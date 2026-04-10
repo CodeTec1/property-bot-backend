@@ -313,7 +313,8 @@ Just the number is fine!`;
         `Great! 💰\n\n` +
         `Are you looking for a ready property or an off-plan development?\n\n` +
         `1️⃣ Ready (move in immediately)\n` +
-        `2️⃣ Off-Plan (under construction)`;
+        `2️⃣ Off-Plan (under construction)\n` +
+        'Choose 1 or 2';
 
       return response;
     }
