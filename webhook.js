@@ -297,14 +297,43 @@ router.post('/', async (req, res) => {
 
     const tenantWhatsApp = tenant.whatsapp_number;
 
-    const { data: agents } = await supabase
+    // Get all agents
+const { data: agents } = await supabase
   .from('agents')
-  .select('agent_name, phone')
+  .select('id, agent_name, phone')
   .eq('tenant_id', tenant.id)
-  .eq('active', true);
+  .eq('active', true)
+  .order('created_at', { ascending: true });
 
+// Get tenant round robin index
+const { data: tenantData } = await supabase
+  .from('tenants')
+  .select('last_assigned_agent_index')
+  .eq('id', tenant.id)
+  .single();
+
+let index = tenantData?.last_assigned_agent_index || 0;
+
+// Pick agent
+const selectedAgent = agents && agents.length > 0
+  ? agents[index % agents.length]
+  : null;
+
+// Update pointer for next time
+if (agents && agents.length > 0) {
+  await supabase
+    .from('tenants')
+    .update({
+      last_assigned_agent_index: (index + 1) % agents.length
+    })
+    .eq('id', tenant.id);
+}
+
+// Use selected agent
 const agentPhone = selectedAgent?.phone || null;
 const agentName = selectedAgent?.agent_name || 'Our Agent';
+
+console.log('Round robin agent selected:', agentName);
 
     const cleanLeadPhone = lead?.phone
       ? lead.phone.replace('whatsapp:', '').trim()
