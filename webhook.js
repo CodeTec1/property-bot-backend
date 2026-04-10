@@ -290,17 +290,15 @@ router.post('/', async (req, res) => {
     // Look up tenant and lead
     const { tenant, lead } = await getTenantAndLead(to, from);
 
+    const agentPhone = lead?.assigned_agent_phone;
+    const agentName = lead?.assigned_agent_name || 'Our Agent';
+
     if (!tenant) {
       await sendMessage(to, from, 'Sorry, this service is not available on this number.');
       return;
     }
 
     const tenantWhatsApp = tenant.whatsapp_number;
-   
-    const selectedAgent = await getNextAgentRoundRobin(tenant.id);
-
-const agentPhone = selectedAgent?.phone || null;
-const agentName = selectedAgent?.agent_name || 'Our Agent';
 
     const cleanLeadPhone = lead?.phone
       ? lead.phone.replace('whatsapp:', '').trim()
@@ -347,18 +345,32 @@ const agentName = selectedAgent?.agent_name || 'Our Agent';
     // ACTION: create — new lead
     // -----------------------------------------------
     if (result.action === 'create') {
-      await supabase
-        .from('leads')
-        .insert({
-          phone: from,
-          tenant_id: tenant.id,
-          status: result.updateFields?.Status || 'New',
-          conversation_stage: result.updateFields?.['Conversation Stage'] || 'asked_buy_or_rent'
-        });
 
-      await sendMessage(tenantWhatsApp, from, result.replyMessage);
-      return;
-    }
+  // STEP 1: get next agent (ONLY ONCE)
+  const selectedAgent = await getNextAgentRoundRobin(tenant.id);
+
+  // STEP 2: create lead + assign agent
+  const { data: newLead } = await supabase
+    .from('leads')
+    .insert({
+      phone: from,
+      tenant_id: tenant.id,
+      status: result.updateFields?.Status || 'New',
+      conversation_stage: result.updateFields?.['Conversation Stage'] || 'asked_buy_or_rent',
+
+      // 👇 ADD THIS (IMPORTANT)
+      assigned_agent_id: selectedAgent?.id || null,
+      assigned_agent_name: selectedAgent?.agent_name || null,
+      assigned_agent_phone: selectedAgent?.phone || null
+    })
+    .select()
+    .single();
+
+  // STEP 3: send message to user
+  await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+  return;
+}
 
     // -----------------------------------------------
     // ACTION: update — update lead fields
@@ -826,191 +838,196 @@ nextStage = 'asked_size';
     // -----------------------------------------------
     // ACTION: create_booking — confirm the booking
     // -----------------------------------------------
-    if (result.action === 'create_booking' && lead) {
-      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+   if (result.action === 'create_booking' && lead) {
+  await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Fetch fresh lead data to get latest saved property ID and slot map
-      const { data: freshLead } = await supabase
-        .from('leads')
-        .select('*')
-        .eq('id', lead.id)
-        .single();
+  // Fetch fresh lead data to get latest saved property ID and slot map
+  const { data: freshLead } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('id', lead.id)
+    .single();
 
-      const propertyId = freshLead?.selected_property_id;
-      const slotMap = freshLead?.available_slots || '{}';
-      const leadName = freshLead?.name || lead.name;
+  const propertyId = freshLead?.selected_property_id;
+  const slotMap = freshLead?.available_slots || '{}';
+  const leadName = freshLead?.name || lead.name;
 
-      if (!propertyId) {
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `Sorry, could not find the property details.\n\nReply HI to start over.`
-        );
-        return;
-      }
+  if (!propertyId) {
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, could not find the property details.\n\nReply HI to start over.`
+    );
+    return;
+  }
 
-      const bookingResponse = await fetch(
-        `https://property-bot-backend.onrender.com/api/create-booking`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            tenantId: tenant.id,
-            leadId: lead.id,
-            propertyId: propertyId,
-            slotNumber: result.selectedTime.toString(),
-            slotMap: slotMap,
-            leadName: leadName,
-            leadPhone: from
-          })
-        }
-      );
-      const bookingData = await bookingResponse.json();
-
-      if (bookingData.success) {
-        await supabase
-          .from('leads')
-          .update({ conversation_stage: 'booking_confirmed' })
-          .eq('id', lead.id);
-
-        // Confirm to user
-        await sendMessage(tenantWhatsApp, from, bookingData.message);
-
-        
-
-await sendTemplateToAgent(
-  tenantWhatsApp,
-  agentPhone,
-          TEMPLATES.BOOKING_CONFIRMED,
-          {
-            "1": leadName || 'Unknown',
-            "2": cleanLeadPhone,
-            "3": bookingData.slotDetails?.property || 'N/A',
-            "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
-            "5": `KES ${freshLead?.budget || 'N/A'}`,
-            "6": freshLead?.location || 'N/A',
-            "7": bookingData.slotDetails?.date || 'N/A',
-            "8": bookingData.slotDetails?.time || 'N/A'
-          }
-        );
-
-      } else if (bookingData.slotTaken) {
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `Sorry, that time slot was just taken.\n\nLet me find you another time...`
-        );
-
-        const newSlotsResponse = await fetch(
-          `https://property-bot-backend.onrender.com/api/available-slots-v2`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              tenantId: tenant.id,
-              propertyId: propertyId,
-              leadId: lead.id
-            })
-          }
-        );
-        const newSlotsData = await newSlotsResponse.json();
-
-        await supabase
-          .from('leads')
-          .update({
-            conversation_stage: 'awaiting_time_slot',
-            available_slots: newSlotsData.slotMap
-          })
-          .eq('id', lead.id);
-
-        await sendMessage(tenantWhatsApp, from, newSlotsData.message);
-
-      } else {
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `Sorry, something went wrong with your booking.\n\n` +
-          `Contact our agent for assistance.\n\n` +
-          `Agent: ${agentName}\n` +
-          `Phone: ${agentPhone || 'N/A'}`
-        );
-      }
-      return;
+  const bookingResponse = await fetch(
+    `https://property-bot-backend.onrender.com/api/create-booking`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tenantId: tenant.id,
+        leadId: lead.id,
+        propertyId: propertyId,
+        slotNumber: result.selectedTime.toString(),
+        slotMap: slotMap,
+        leadName: leadName,
+        leadPhone: from
+      })
     }
+  );
+
+  const bookingData = await bookingResponse.json();
+
+  if (bookingData.success) {
+    await supabase
+      .from('leads')
+      .update({ conversation_stage: 'booking_confirmed' })
+      .eq('id', lead.id);
+
+    // Confirm to user
+    await sendMessage(tenantWhatsApp, from, bookingData.message);
+
+    // ✅ USE ASSIGNED AGENT (NO ROUND ROBIN HERE)
+    await sendTemplateToAgent(
+      tenantWhatsApp,
+      agentPhone,
+      TEMPLATES.BOOKING_CONFIRMED,
+      {
+        "1": leadName || 'Unknown',
+        "2": cleanLeadPhone,
+        "3": bookingData.slotDetails?.property || 'N/A',
+        "4": `KES ${Number(bookingData.slotDetails?.price || 0).toLocaleString()}`,
+        "5": `KES ${freshLead?.budget || 'N/A'}`,
+        "6": freshLead?.location || 'N/A',
+        "7": bookingData.slotDetails?.date || 'N/A',
+        "8": bookingData.slotDetails?.time || 'N/A'
+      }
+    );
+
+  } else if (bookingData.slotTaken) {
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, that time slot was just taken.\n\nLet me find you another time...`
+    );
+
+    const newSlotsResponse = await fetch(
+      `https://property-bot-backend.onrender.com/api/available-slots-v2`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: tenant.id,
+          propertyId: propertyId,
+          leadId: lead.id
+        })
+      }
+    );
+
+    const newSlotsData = await newSlotsResponse.json();
+
+    await supabase
+      .from('leads')
+      .update({
+        conversation_stage: 'awaiting_time_slot',
+        available_slots: newSlotsData.slotMap
+      })
+      .eq('id', lead.id);
+
+    await sendMessage(tenantWhatsApp, from, newSlotsData.message);
+
+  } else {
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, something went wrong with your booking.\n\n` +
+      `Contact our agent for assistance.\n\n` +
+      `Agent: ${agentName}\n` +
+      `Phone: ${agentPhone || 'N/A'}`
+    );
+  }
+
+  return;
+}
 
     // -----------------------------------------------
     // ACTION: cancel_booking
     // -----------------------------------------------
-    if (result.action === 'cancel_booking' && lead) {
-      await supabase
-        .from('leads')
-        .update({
-          conversation_stage: 'booking_cancelled',
-          status: 'Cancelled'
-        })
-        .eq('id', lead.id);
+   if (result.action === 'cancel_booking' && lead) {
+  await supabase
+    .from('leads')
+    .update({
+      conversation_stage: 'booking_cancelled',
+      status: 'Cancelled'
+    })
+    .eq('id', lead.id);
 
-      const cancelResponse = await fetch(
-        `https://property-bot-backend.onrender.com/api/cancel-booking`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            leadId: lead.id,
-            calendarId: tenant.google_calendar_id
-          })
-        }
-      );
-      const cancelData = await cancelResponse.json();
-
-      await sendMessage(
-        tenantWhatsApp,
-        from,
-        cancelData.userMessage ||
-        `Your viewing has been cancelled.\n\nReply HI to search for another property.`
-      );
-
-      // Notify agent via template
-      await sendTemplateToAgent(
-        tenantWhatsApp,
-        agentPhone,
-        TEMPLATES.BOOKING_CANCELLED,
-        {
-          "1": lead.name || 'Unknown',
-          "2": cleanLeadPhone
-        }
-      );
-      return;
+  const cancelResponse = await fetch(
+    `https://property-bot-backend.onrender.com/api/cancel-booking`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        leadId: lead.id,
+        calendarId: tenant.google_calendar_id
+      })
     }
+  );
+
+  const cancelData = await cancelResponse.json();
+
+  await sendMessage(
+    tenantWhatsApp,
+    from,
+    cancelData.userMessage ||
+    `Your viewing has been cancelled.\n\nReply HI to search for another property.`
+  );
+
+  // ✅ USE ASSIGNED AGENT (NO ROUND ROBIN)
+  await sendTemplateToAgent(
+    tenantWhatsApp,
+    agentPhone,
+    TEMPLATES.BOOKING_CANCELLED,
+    {
+      "1": lead.name || 'Unknown',
+      "2": cleanLeadPhone
+    }
+  );
+
+  return;
+}
 
     // -----------------------------------------------
     // ACTION: followup_interested
     // -----------------------------------------------
     if (result.action === 'followup_interested' && lead) {
-      await supabase
-        .from('leads')
-        .update({
-          status: 'Hot Lead',
-          conversation_stage: 'interested_after_viewing',
-          awaiting_followup_response: false
-        })
-        .eq('id', lead.id);
+  await supabase
+    .from('leads')
+    .update({
+      status: 'Hot Lead',
+      conversation_stage: 'interested_after_viewing',
+      awaiting_followup_response: false
+    })
+    .eq('id', lead.id);
 
-      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+  await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      // Notify agent via template
-      await sendTemplateToAgent(
-        tenantWhatsApp,
-        agentPhone,
-        TEMPLATES.HOT_LEAD,
-        {
-          "1": lead.name || 'Unknown',
-          "2": cleanLeadPhone,
-          "3": lead.last_viewed_property || 'N/A'
-        }
-      );
-      return;
+  // ✅ USE ASSIGNED AGENT (NO ROUND ROBIN)
+  await sendTemplateToAgent(
+    tenantWhatsApp,
+    agentPhone,
+    TEMPLATES.HOT_LEAD,
+    {
+      "1": lead.name || 'Unknown',
+      "2": cleanLeadPhone,
+      "3": lead.last_viewed_property || 'N/A'
     }
+  );
+
+  return;
+}
 
     // -----------------------------------------------
     // ACTION: followup_not_interested
