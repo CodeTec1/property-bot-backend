@@ -297,7 +297,11 @@ router.post('/', async (req, res) => {
 
     const tenantWhatsApp = tenant.whatsapp_number;
 
-    const selectedAgent = await getNextAgentRoundRobin(tenant.id);
+    const { data: agents } = await supabase
+  .from('agents')
+  .select('agent_name, phone')
+  .eq('tenant_id', tenant.id)
+  .eq('active', true);
 
 const agentPhone = selectedAgent?.phone || null;
 const agentName = selectedAgent?.agent_name || 'Our Agent';
@@ -402,7 +406,14 @@ const agentName = selectedAgent?.agent_name || 'Our Agent';
       }
 
       if (Object.keys(updateData).length > 0) {
-        await supabase.from('leads').update(updateData).eq('id', lead.id);
+        const { error: updateError } = await supabase
+  .from('leads')
+  .update(updateData)
+  .eq('id', lead.id);
+
+if (updateError) {
+  console.error('Supabase update error:', updateError);
+}
       }
 
       // Send reply first
@@ -528,6 +539,19 @@ const propertyMessage =
           }
         }
       }
+
+      if (Object.keys(updateData).length > 0) {
+  console.log('Update data:', updateData);
+
+  const { error: updateError } = await supabase
+    .from('leads')
+    .update(updateData)
+    .eq('id', lead.id);
+
+  if (updateError) {
+    console.error('Supabase update error:', updateError);
+  }
+}
 
       return;
     }
@@ -870,9 +894,11 @@ nextStage = 'asked_size';
         await sendMessage(tenantWhatsApp, from, bookingData.message);
 
         // Notify agent via template
-        await sendTemplateToAgent(
-          tenantWhatsApp,
-          agentPhone,
+        const selectedAgent = await getNextAgentRoundRobin(tenant.id);
+
+await sendTemplateToAgent(
+  tenantWhatsApp,
+  selectedAgent?.phone,
           TEMPLATES.BOOKING_CONFIRMED,
           {
             "1": leadName || 'Unknown',
