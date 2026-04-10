@@ -385,8 +385,9 @@ Just the number is fine!`;
     // ======================================
     if (stage === "asked_completion") {
       const completionInput = originalMessage.trim();
+      const isNumber = /^\d+$/.test(completionInput);
 
-      if (!completionInput || completionInput.length < 2) {
+      if (!completionInput || completionInput.length < 1) {
         response.action = "invalid";
         response.replyMessage = `Please choose a completion date from the options above.`;
         return response;
@@ -652,45 +653,6 @@ Example: 3 or Slot 3`;
       return response;
     }
 
-    // -----------------------------------------------
-// STAGE: asked_completion (HANDLE USER INPUT)
-// -----------------------------------------------
-if (lead_stage === 'asked_completion') {
-  const trimmed = message.trim();
-  const number = parseInt(trimmed);
-
-  // ✅ CASE 1: User selected number (1, 2, etc.)
-  if (!isNaN(number)) {
-    return {
-      action: 'update',
-      updateFields: {
-        CompletionRange: trimmed,
-        'Conversation Stage': 'completed_search'
-      },
-      searchProperties: true,
-      replyMessage: 'Great! Let me find matching properties for you...'
-    };
-  }
-
-  // ✅ CASE 2: User typed actual date
-  if (trimmed.length > 3) {
-    return {
-      action: 'update',
-      updateFields: {
-        CompletionRange: trimmed,
-        'Conversation Stage': 'completed_search'
-      },
-      searchProperties: true,
-      replyMessage: 'Great! Let me find matching properties for you...'
-    };
-  }
-
-  // ❌ Invalid input
-  return {
-    action: 'none',
-    replyMessage: 'Please choose a completion date by typing the number or the date from the list above.'
-  };
-}
 
     // ======================================
     // DEFAULT (Catch-all for unexpected input)
