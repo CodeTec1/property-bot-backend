@@ -295,6 +295,7 @@ router.post('/', async (req, res) => {
       awaiting_followup_response: lead?.awaiting_followup_response || false,
       lead_is_offplan: lead?.is_offplan ?? null,
       lead_completion_range: lead?.completion_range || null,
+      last_completion_options: lead?.last_search_results || null,
       tenant_id: tenant.id,
       tenant_company_name: tenant.company_name,
       tenant_bot_name: tenant.bot_name,

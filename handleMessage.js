@@ -384,7 +384,22 @@ Just the number is fine!`;
     // STAGE 5C: COMPLETION DATE (Off-plan only)
     // ======================================
     if (stage === "asked_completion") {
-      const completionInput = originalMessage.trim();
+      let completionInput = originalMessage.trim();
+let displayCompletion = completionInput;
+
+// If user typed a number → convert to actual date
+if (/^\d+$/.test(completionInput) && input.last_completion_options) {
+  try {
+    const dates = JSON.parse(input.last_completion_options);
+    const index = parseInt(completionInput) - 1;
+
+    if (dates[index]) {
+      displayCompletion = dates[index];
+    }
+  } catch (e) {
+    console.error('Error parsing completion dates:', e);
+  }
+}
       const isNumber = /^\d+$/.test(completionInput);
 
       if (!completionInput || completionInput.length < 1) {
@@ -414,7 +429,7 @@ Just the number is fine!`;
         `• Location: ${finalLocation}\n` +
         `• Size: ${displaySize}\n` +
         `• Budget: KES ${finalBudget}\n` +
-        `• Completion: ${completionInput}\n\n` +
+        `• Completion: ${displayCompletion}\n\n` +
         `Searching properties... 🔍`;
       return response;
     }
@@ -553,7 +568,6 @@ Choose from the options above!`;
         "Status": "Contacted"
       };
 
-      
       response.interest = finalInterest;
       response.location = finalLocation;
       response.plotSize = plotSize;
