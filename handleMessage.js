@@ -553,6 +553,7 @@ Choose from the options above!`;
         "Status": "Contacted"
       };
 
+      
       response.interest = finalInterest;
       response.location = finalLocation;
       response.plotSize = plotSize;
