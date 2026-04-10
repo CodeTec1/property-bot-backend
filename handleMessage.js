@@ -313,7 +313,7 @@ Just the number is fine!`;
         `Great! 💰\n\n` +
         `Are you looking for a ready property or an off-plan development?\n\n` +
         `1️⃣ Ready (move in immediately)\n` +
-        `2️⃣ Off-Plan (under construction)\n` +
+        `2️⃣ Off-Plan (under construction)\n\n` +
         'Choose 1 or 2';
 
       return response;
@@ -651,6 +651,46 @@ Example: 3 or Slot 3`;
       response.replyMessage = "Cancelling your booking... ⏳";
       return response;
     }
+
+    // -----------------------------------------------
+// STAGE: asked_completion (HANDLE USER INPUT)
+// -----------------------------------------------
+if (lead_stage === 'asked_completion') {
+  const trimmed = message.trim();
+  const number = parseInt(trimmed);
+
+  // ✅ CASE 1: User selected number (1, 2, etc.)
+  if (!isNaN(number)) {
+    return {
+      action: 'update',
+      updateFields: {
+        CompletionRange: trimmed,
+        'Conversation Stage': 'completed_search'
+      },
+      searchProperties: true,
+      replyMessage: 'Great! Let me find matching properties for you...'
+    };
+  }
+
+  // ✅ CASE 2: User typed actual date
+  if (trimmed.length > 3) {
+    return {
+      action: 'update',
+      updateFields: {
+        CompletionRange: trimmed,
+        'Conversation Stage': 'completed_search'
+      },
+      searchProperties: true,
+      replyMessage: 'Great! Let me find matching properties for you...'
+    };
+  }
+
+  // ❌ Invalid input
+  return {
+    action: 'none',
+    replyMessage: 'Please choose a completion date by typing the number or the date from the list above.'
+  };
+}
 
     // ======================================
     // DEFAULT (Catch-all for unexpected input)
