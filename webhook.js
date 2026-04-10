@@ -232,6 +232,47 @@ function formatKenyaTime(isoString) {
   });
 }
 
+async function getNextAgentRoundRobin(tenantId) {
+  // Step 1: get all active agents
+  const { data: agents } = await supabase
+    .from('agents')
+    .select('id, agent_name, phone')
+    .eq('tenant_id', tenantId)
+    .eq('active', true)
+    .order('created_at', { ascending: true });
+
+  if (!agents || agents.length === 0) {
+    console.log('No agents found for tenant');
+    return null;
+  }
+
+  // Step 2: get tenant pointer
+  const { data: tenantData } = await supabase
+    .from('tenants')
+    .select('last_assigned_agent_index')
+    .eq('id', tenantId)
+    .single();
+
+  let index = tenantData?.last_assigned_agent_index || 0;
+
+  // Step 3: pick agent
+  const agent = agents[index % agents.length];
+
+  // Step 4: update pointer
+  const nextIndex = (index + 1) % agents.length;
+
+  await supabase
+    .from('tenants')
+    .update({
+      last_assigned_agent_index: nextIndex
+    })
+    .eq('id', tenantId);
+
+  console.log('Round robin agent selected:', agent.agent_name);
+
+  return agent;
+}
+
 // ============================================
 // WEBHOOK: Receive WhatsApp messages from Twilio
 // ============================================
@@ -256,16 +297,11 @@ router.post('/', async (req, res) => {
 
     const tenantWhatsApp = tenant.whatsapp_number;
 
-    // Get agent details
-    const { data: agentData } = await supabase
-      .from('agents')
-      .select('agent_name, phone, email')
-      .eq('tenant_id', tenant.id)
-      .eq('active', true)
-      .single();
+    const selectedAgent = await getNextAgentRoundRobin(tenant.id);
 
-    const agentPhone = agentData?.phone || null;
-    const agentName = agentData?.agent_name || 'Our Agent';
+const agentPhone = selectedAgent?.phone || null;
+const agentName = selectedAgent?.agent_name || 'Our Agent';
+
     const cleanLeadPhone = lead?.phone
       ? lead.phone.replace('whatsapp:', '').trim()
       : from.replace('whatsapp:', '').trim();
