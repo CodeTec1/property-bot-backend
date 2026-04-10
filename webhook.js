@@ -296,44 +296,11 @@ router.post('/', async (req, res) => {
     }
 
     const tenantWhatsApp = tenant.whatsapp_number;
+   
+    const selectedAgent = await getNextAgentRoundRobin(tenant.id);
 
-    // Get all agents
-const { data: agents } = await supabase
-  .from('agents')
-  .select('id, agent_name, phone')
-  .eq('tenant_id', tenant.id)
-  .eq('active', true)
-  .order('created_at', { ascending: true });
-
-// Get tenant round robin index
-const { data: tenantData } = await supabase
-  .from('tenants')
-  .select('last_assigned_agent_index')
-  .eq('id', tenant.id)
-  .single();
-
-let index = tenantData?.last_assigned_agent_index || 0;
-
-// Pick agent
-const selectedAgent = agents && agents.length > 0
-  ? agents[index % agents.length]
-  : null;
-
-// Update pointer for next time
-if (agents && agents.length > 0) {
-  await supabase
-    .from('tenants')
-    .update({
-      last_assigned_agent_index: (index + 1) % agents.length
-    })
-    .eq('id', tenant.id);
-}
-
-// Use selected agent
 const agentPhone = selectedAgent?.phone || null;
 const agentName = selectedAgent?.agent_name || 'Our Agent';
-
-console.log('Round robin agent selected:', agentName);
 
     const cleanLeadPhone = lead?.phone
       ? lead.phone.replace('whatsapp:', '').trim()
@@ -568,19 +535,6 @@ const propertyMessage =
           }
         }
       }
-
-      if (Object.keys(updateData).length > 0) {
-  console.log('Update data:', updateData);
-
-  const { error: updateError } = await supabase
-    .from('leads')
-    .update(updateData)
-    .eq('id', lead.id);
-
-  if (updateError) {
-    console.error('Supabase update error:', updateError);
-  }
-}
 
       return;
     }
@@ -922,12 +876,11 @@ nextStage = 'asked_size';
         // Confirm to user
         await sendMessage(tenantWhatsApp, from, bookingData.message);
 
-        // Notify agent via template
-        const selectedAgent = await getNextAgentRoundRobin(tenant.id);
+        
 
 await sendTemplateToAgent(
   tenantWhatsApp,
-  selectedAgent?.phone,
+  agentPhone,
           TEMPLATES.BOOKING_CONFIRMED,
           {
             "1": leadName || 'Unknown',
