@@ -450,32 +450,26 @@ Just the number is fine!`;
         return response;
       }
 
-      // CHECK READY PROPERTIES
-const exists = await checkPropertyExists(input.tenant_id, {
-  type: lead.Interest || input.lead_interest,
-  isOffplan: false
-});
-
-if (!exists) {
-  const agentName = input.assigned_agent_name || "Our Agent";
-  const agentPhone = input.assigned_agent_phone || "N/A";
-
-  response.action = "update";
-  response.updateFields = {
-    "Conversation Stage": "asked_offplan"
-  };
-
-  response.replyMessage =
-    `No ready properties available right now.\n\n` +
-    `We currently have off-plan options.\n\n` +
-    `Reply HI to search again\n` +
-    `or contact our agent:\n` +
-    `${agentName}\n${agentPhone}`;
-
-  return response;
-}
-
       if (isReady) {
+        // Check if ready properties exist for this tenant
+        const readyExists = await checkPropertyExists(input.tenant_id, {
+          type: lead.Interest || input.lead_interest,
+          isOffplan: false
+        });
+
+        if (!readyExists) {
+          response.action = "update";
+          response.updateFields = { "Conversation Stage": "asked_offplan" };
+          response.replyMessage =
+            `No ready properties available right now.\n\n` +
+            `We currently have off-plan options.\n\n` +
+            `Reply *2* to see off-plan properties\n` +
+            `or contact our agent:\n` +
+            `${input.assigned_agent_name || agentName || 'Our Agent'}\n` +
+            `${input.assigned_agent_phone || agentPhone || 'N/A'}`;
+          return response;
+        }
+
         response.action = "update";
         response.updateFields = {
           "Conversation Stage": "completed",
@@ -502,41 +496,34 @@ if (!exists) {
         return response;
       }
 
-      const offplanExists = await checkPropertyExists(input.tenant_id, {
-  type: lead.Interest || input.lead_interest,
-  isOffplan: true
-});
-
-if (!offplanExists) {
-  const agentName = input.assigned_agent_name || "Our Agent";
-  const agentPhone = input.assigned_agent_phone || "N/A";
-
-  response.action = "update";
-  response.updateFields = {
-    "Conversation Stage": "asked_offplan"
-  };
-
-  response.replyMessage =
-    `No off-plan properties available right now.\n\n` +
-    `We currently have ready properties.\n\n` +
-    `Reply HI to search again\n` +
-    `or contact our agent:\n` +
-    `${agentName}\n${agentPhone}`;
-
-  return response;
-}
-
       if (isOffplan) {
+        // Check if offplan properties exist for this tenant
+        const offplanExists = await checkPropertyExists(input.tenant_id, {
+          type: lead.Interest || input.lead_interest,
+          isOffplan: true
+        });
+
+        if (!offplanExists) {
+          response.action = "update";
+          response.updateFields = { "Conversation Stage": "asked_offplan" };
+          response.replyMessage =
+            `No off-plan properties available right now.\n\n` +
+            `We currently have ready properties.\n\n` +
+            `Reply *1* to see ready properties\n` +
+            `or contact our agent:\n` +
+            `${input.assigned_agent_name || agentName || 'Our Agent'}\n` +
+            `${input.assigned_agent_phone || agentPhone || 'N/A'}`;
+          return response;
+        }
+
         response.action = "fetch_completion_dates";
-        response.updateFields = {
-          "Conversation Stage": "fetching_completion"
-        };
+        response.updateFields = { "Conversation Stage": "fetching_completion" };
         response.isOffplan = true;
         response.replyMessage = `Great! Let me check available completion dates... 🔍`;
         return response;
       }
     }
-
+    
     // ======================================
     // STAGE 5C: COMPLETION DATE (Off-plan only)
     // ======================================
