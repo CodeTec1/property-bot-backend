@@ -369,185 +369,211 @@ router.post('/', async (req, res) => {
   return;
 }
 
-    // -----------------------------------------------
-    // ACTION: update — update lead fields
-    // -----------------------------------------------
-    if (result.action === 'update' && lead) {
-      const updateData = {};
-      if (result.updateFields?.['Conversation Stage']) updateData.conversation_stage = result.updateFields['Conversation Stage'];
-      if (result.updateFields?.Name) updateData.name = result.updateFields.Name;
-      if (result.updateFields?.Interest) updateData.interest = result.updateFields.Interest;
-      if (result.updateFields?.Budget) updateData.budget = result.updateFields.Budget;
-      if (result.updateFields?.Location) updateData.location = result.updateFields.Location;
-      if (result.updateFields?.Size) updateData.size = result.updateFields.Size;
-      if (result.updateFields?.Status) updateData.status = result.updateFields.Status;
+ // -----------------------------------------------
+// ACTION: update — update lead fields
+// -----------------------------------------------
+if (result.action === 'update' && lead) {
 
-      if (result.isOffplan !== null && result.isOffplan !== undefined) {
-        updateData.is_offplan = result.isOffplan;
-      }
-      if (result.updateFields?.CompletionRange) {
-        let completionValue = result.updateFields.CompletionRange;
+  // ============================================
+  // ENSURE LEAD HAS ASSIGNED AGENT
+  // ============================================
+  let assignedAgent = {
+    phone: lead.assigned_agent_phone,
+    agent_name: lead.assigned_agent_name
+  };
 
-        // If user typed a number, resolve it to actual date from stored list
-        if (/^\d+$/.test(completionValue.trim())) {
-          const { data: leadWithDates } = await supabase
-            .from('leads')
-            .select('last_search_results')
-            .eq('id', lead.id)
-            .single();
+  if (!lead.assigned_agent_phone) {
+    console.log('No assigned agent found for this lead. Assigning now...');
 
-          try {
-            const storedDates = JSON.parse(leadWithDates?.last_search_results || '[]');
-            const index = parseInt(completionValue) - 1;
-            if (storedDates[index]) {
-              completionValue = storedDates[index];
-            }
-          } catch (e) {
-            console.error('Error parsing stored dates:', e);
-          }
+    const selectedAgent = await getNextAgentRoundRobin(tenant.id);
+
+    if (selectedAgent) {
+      await supabase
+        .from('leads')
+        .update({
+          assigned_agent_id: selectedAgent.id,
+          assigned_agent_name: selectedAgent.agent_name,
+          assigned_agent_phone: selectedAgent.phone
+        })
+        .eq('id', lead.id);
+
+      assignedAgent = {
+        phone: selectedAgent.phone,
+        agent_name: selectedAgent.agent_name
+      };
+
+      console.log('Agent assigned during update:', assignedAgent);
+    }
+  }
+
+  const updateData = {};
+  if (result.updateFields?.['Conversation Stage']) updateData.conversation_stage = result.updateFields['Conversation Stage'];
+  if (result.updateFields?.Name) updateData.name = result.updateFields.Name;
+  if (result.updateFields?.Interest) updateData.interest = result.updateFields.Interest;
+  if (result.updateFields?.Budget) updateData.budget = result.updateFields.Budget;
+  if (result.updateFields?.Location) updateData.location = result.updateFields.Location;
+  if (result.updateFields?.Size) updateData.size = result.updateFields.Size;
+  if (result.updateFields?.Status) updateData.status = result.updateFields.Status;
+
+  if (result.isOffplan !== null && result.isOffplan !== undefined) {
+    updateData.is_offplan = result.isOffplan;
+  }
+
+  if (result.updateFields?.CompletionRange) {
+    let completionValue = result.updateFields.CompletionRange;
+
+    if (/^\d+$/.test(completionValue.trim())) {
+      const { data: leadWithDates } = await supabase
+        .from('leads')
+        .select('last_search_results')
+        .eq('id', lead.id)
+        .single();
+
+      try {
+        const storedDates = JSON.parse(leadWithDates?.last_search_results || '[]');
+        const index = parseInt(completionValue) - 1;
+        if (storedDates[index]) {
+          completionValue = storedDates[index];
         }
-
-        updateData.completion_range = completionValue;
+      } catch (e) {
+        console.error('Error parsing stored dates:', e);
       }
+    }
 
-      if (Object.keys(updateData).length > 0) {
-        const { error: updateError } = await supabase
-  .from('leads')
-  .update(updateData)
-  .eq('id', lead.id);
+    updateData.completion_range = completionValue;
+  }
 
-if (updateError) {
-  console.error('Supabase update error:', updateError);
-}
-      }
+  if (Object.keys(updateData).length > 0) {
+    const { error: updateError } = await supabase
+      .from('leads')
+      .update(updateData)
+      .eq('id', lead.id);
 
-      // Send reply first
-      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+    if (updateError) {
+      console.error('Supabase update error:', updateError);
+    }
+  }
 
-      // Then search properties if needed
-    if (result.searchProperties) {
-        const searchInterest = updateData.interest || lead.interest;
-        const searchLocation = updateData.location || lead.location;
-        const searchSize = updateData.size || lead.size;
+  // Send reply first
+  await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-        console.log('Searching with:', { searchInterest, searchLocation, searchSize });
+  // Then search properties if needed
+  if (result.searchProperties) {
+    const searchInterest = updateData.interest || lead.interest;
+    const searchLocation = updateData.location || lead.location;
+    const searchSize = updateData.size || lead.size;
+
+    console.log('Searching with:', { searchInterest, searchLocation, searchSize });
 
     const properties = await searchProperties(
-          tenant.id,
-          searchInterest,
-          searchLocation,
-          searchSize,
-          updateData.budget || lead.budget,
-          updateData.is_offplan ?? lead.is_offplan,
-          updateData.completion_range || lead.completion_range
-        );
+      tenant.id,
+      searchInterest,
+      searchLocation,
+      searchSize,
+      updateData.budget || lead.budget,
+      updateData.is_offplan ?? lead.is_offplan,
+      updateData.completion_range || lead.completion_range
+    );
 
-        if (properties.length > 0) {
-          const searchResultsToSave = properties.map((p, i) => ({
-            number: i + 1,
-            id: p.id,
-            name: p.property_name,
-            price: p.price,
-            location: p.location,
-            address: p.address,
-            bedrooms: p.bedrooms,
-            plot_size: p.plot_size,
-            type: p.type,
-            photo_url: p.photo_url
-          }));
+    if (properties.length > 0) {
+      const searchResultsToSave = properties.map((p, i) => ({
+        number: i + 1,
+        id: p.id,
+        name: p.property_name,
+        price: p.price,
+        location: p.location,
+        address: p.address,
+        bedrooms: p.bedrooms,
+        plot_size: p.plot_size,
+        type: p.type,
+        photo_url: p.photo_url
+      }));
 
-          await supabase
-            .from('leads')
-            .update({ search_results: searchResultsToSave })
-            .eq('id', lead.id);
+      await supabase
+        .from('leads')
+        .update({ search_results: searchResultsToSave })
+        .eq('id', lead.id);
 
-          console.log(`Sending ${properties.length} properties to user...`);
+      console.log(`Sending ${properties.length} properties to user...`);
 
-          for (let i = 0; i < properties.length; i++) {
-            const property = properties[i];
+      for (let i = 0; i < properties.length; i++) {
+        const property = properties[i];
 
-            try {
-              const sizeText = property.type === 'Land'
-  ? `${property.plot_size}`
-  : property.bedrooms === 0
-    ? `Studio`
-    : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
+        try {
+          const sizeText = property.type === 'Land'
+            ? `${property.plot_size}`
+            : property.bedrooms === 0
+              ? `Studio`
+              : `${property.bedrooms} Bed${property.bedrooms > 1 ? 's' : ''}`;
 
-const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
-const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
+          const priceFormatted = `KES ${Number(property.price || 0).toLocaleString()}`;
+          const sqmText = property.sqm ? ` (${property.sqm}sqm)` : '';
 
-const propertyMessage =
-   `🏢 *PROPERTY ${i + 1}*\n` +
-   `──────────\n\n` +
-  (property.project_name
-    ? `*${property.project_name}*\n`
-    : '') +
-  `*${property.property_name}*\n\n` +
-  `📍 ${property.location}\n` +
-  `💰 ${priceFormatted}\n` +
-  `🛏 ${sizeText}${sqmText}\n` +
-  (property.completion_date
-    ? `🏗 Completion: ${property.completion_date}\n`
-    : '') +
-  `📮 ${property.address}\n` +
-  (property.description
-    ? `\n${property.description}\n`
-    : '') +
-  `\n──────────\n` +
-  `Reply *Property${i + 1}* to book a viewing`;
+          const propertyMessage =
+            `🏢 *PROPERTY ${i + 1}*\n` +
+            `──────────\n\n` +
+            (property.project_name ? `*${property.project_name}*\n` : '') +
+            `*${property.property_name}*\n\n` +
+            `📍 ${property.location}\n` +
+            `💰 ${priceFormatted}\n` +
+            `🛏 ${sizeText}${sqmText}\n` +
+            (property.completion_date ? `🏗 Completion: ${property.completion_date}\n` : '') +
+            `📮 ${property.address}\n` +
+            (property.description ? `\n${property.description}\n` : '') +
+            `\n──────────\n` +
+            `Reply *Property${i + 1}* to book a viewing`;
 
-              console.log(`Sending property ${i + 1}: ${property.property_name}`);
-
-              await sendMessage(
-              tenantWhatsApp,
-              from,
-              propertyMessage,
-              property.photo_url || null
-            );
-
-              console.log(`Property ${i + 1} sent successfully`);
-
-              if (i < properties.length - 1) await delay(2000);
-
-            } catch (propError) {
-              console.error(`Error sending property ${i + 1}:`, propError.message);
-              continue;
-            }
-          }
-
-          console.log('All properties sent successfully');
-
-        } else {
-          console.log('No properties found - notifying user and agent');
+          console.log(`Sending property ${i + 1}: ${property.property_name}`);
 
           await sendMessage(
             tenantWhatsApp,
             from,
-            `Sorry, we could not find any properties matching your criteria at the moment.\n\n` +
-            `Our agent will contact you shortly to assist you personally.\n\n` +
-            `Agent: ${agentName}\n` +
-            `Phone: ${agentPhone || 'N/A'}\n\n` +
-            `You can also reply HI to start a new search.`
+            propertyMessage,
+            property.photo_url || null
           );
 
-          if (agentPhone) {
-            await sendTemplateToAgent(
-              tenantWhatsApp,
-              agentPhone,
-              TEMPLATES.NO_PROPERTY_FOUND,
-              {
-                "1": lead.name || 'Unknown',
-                "2": cleanLeadPhone,
-                "3": kenyaTime
-              }
-            );
-          }
+          console.log(`Property ${i + 1} sent successfully`);
+
+          if (i < properties.length - 1) await delay(2000);
+
+        } catch (propError) {
+          console.error(`Error sending property ${i + 1}:`, propError.message);
+          continue;
         }
       }
 
-      return;
-    }
+      console.log('All properties sent successfully');
 
+    } else {
+      console.log('No properties found - notifying user and agent');
+
+      await sendMessage(
+        tenantWhatsApp,
+        from,
+        `Sorry, we could not find any properties matching your criteria at the moment.\n\n` +
+        `Our agent will contact you shortly to assist you personally.\n\n` +
+        `Agent: ${assignedAgent.agent_name}\n` +
+        `Phone: ${assignedAgent.phone || 'N/A'}\n\n` +
+        `You can also reply HI to start a new search.`
+      );
+
+      if (assignedAgent.phone) {
+        await sendTemplateToAgent(
+          tenantWhatsApp,
+          assignedAgent.phone,
+          TEMPLATES.NO_PROPERTY_FOUND,
+          {
+            "1": lead.name || 'Unknown',
+            "2": cleanLeadPhone,
+            "3": kenyaTime
+          }
+        );
+      }
+    }
+  }
+
+  return;
+}
     // -----------------------------------------------
     // ACTION: fetch_locations
     // -----------------------------------------------
