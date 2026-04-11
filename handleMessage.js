@@ -591,83 +591,94 @@ if (/^\d+$/.test(completionInput) && input.last_completion_options) {
     }
 
 // ======================================
-// STAGE 4: LOCATION (NUMBER + TEXT SUPPORT)
+// STAGE 4: LOCATION (FIXED + BULLETPROOF)
 // ======================================
 if (stage === "asked_location") {
 
   let locationOptions = [];
 
-  // STEP 1: LOAD STORED LOCATION OPTIONS
+  // STEP 1: SAFE PARSE STORED OPTIONS
   try {
-    locationOptions = JSON.parse(lead.location_options || '[]');
+    if (lead.location_options) {
+      locationOptions =
+        typeof lead.location_options === "string"
+          ? JSON.parse(lead.location_options)
+          : lead.location_options;
+    }
   } catch (e) {
+    console.error("Failed to parse location_options:", e);
     locationOptions = [];
   }
 
   let location = null;
 
   // ======================================
-  // STEP 2: HANDLE NUMBER INPUT (NEW)
+  // STEP 2: NUMBER INPUT (PRIMARY LOGIC)
   // ======================================
-  if (/^\d+$/.test(message)) {
+  const isNumber = /^\d+$/.test(message);
+
+  if (isNumber && locationOptions.length > 0) {
     const index = parseInt(message) - 1;
-    location = locationOptions[index];
+
+    console.log("Location selection index:", index);
+    console.log("Available locations:", locationOptions);
+
+    if (index >= 0 && index < locationOptions.length) {
+      location = locationOptions[index];
+    } else {
+      response.action = "invalid";
+      response.replyMessage =
+        `Please choose a valid number from the list (1 - ${locationOptions.length}).`;
+      return response;
+    }
   }
 
   // ======================================
-  // STEP 3: HANDLE TEXT INPUT (OLD SUPPORT)
+  // STEP 3: TEXT INPUT (FALLBACK ONLY)
   // ======================================
   if (!location) {
     let cleanedMessage = message;
 
-    // Clean up common prefixes
     if (message.match(/in (.+)/i)) {
       cleanedMessage = message.match(/in (.+)/i)[1];
     } else if (message.match(/at (.+)/i)) {
       cleanedMessage = message.match(/at (.+)/i)[1];
     }
 
-    // Normalize text input
-    location = cleanedMessage.trim()
+    location = cleanedMessage
+      .trim()
       .split(/\s+/)
       .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
   }
 
   // ======================================
-  // STEP 4: VALIDATION
+  // STEP 4: FINAL VALIDATION
   // ======================================
   if (!location || location.length < 2) {
     response.action = "invalid";
     response.replyMessage =
-      `Please choose a valid location from the list.\n\n` +
-      `Reply with the NUMBER (e.g. 1, 2, 3) or type the area name.`;
+      `Please choose a valid location.\n\n` +
+      `Reply with the NUMBER (e.g. 1, 2, 3, 4, 5) or type the area name.`;
     return response;
   }
 
   // ======================================
-  // STEP 5: GET INTEREST
+  // STEP 5: CONTINUE FLOW
   // ======================================
   const interest = lead.Interest || input.lead_interest;
 
-  // ======================================
-  // STEP 6: UPDATE LEAD
-  // ======================================
   response.action = "fetch_sizes";
   response.updateFields = {
-    "Location": location,
+    Location: location,
     "Conversation Stage": "fetching_sizes"
   };
 
   response.interest = interest;
   response.location = location;
 
-  // ======================================
-  // STEP 7: RESPONSE MESSAGE
-  // ======================================
   response.replyMessage =
-    `Perfect! 📍\n\n` +
-    `Checking what's available in ${location}... 🔍`;
+    `Perfect! 📍\n\nChecking what's available in ${location}... 🔍`;
 
   return response;
 }
