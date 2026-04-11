@@ -581,6 +581,15 @@ if (result.action === 'update' && lead) {
 
       console.log('All properties sent successfully');
 
+      await sendMessage(
+  tenantWhatsApp,
+  from,
+  `I’ve sent you ${properties.length} propert${properties.length === 1 ? 'y' : 'ies'}.\n\n` +
+  `To book a viewing:\n` +
+  `Reply with the property number (e.g. 1, 2, 3)\n` +
+  `or type Property 1`
+);
+
     } else {
       console.log('No properties found - notifying user and agent');
 
