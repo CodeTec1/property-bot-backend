@@ -597,6 +597,9 @@ if (stage === "asked_location") {
 
   let locationOptions = [];
 
+  console.log("RAW MESSAGE:", message);
+  console.log("STORED OPTIONS:", lead.location_options);
+
   // STEP 1: SAFE PARSE STORED OPTIONS
   try {
     if (lead.location_options) {

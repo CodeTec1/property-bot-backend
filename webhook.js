@@ -608,10 +608,7 @@ await sendMessage(
 
   return;
 }
-    // -----------------------------------------------
-// ACTION: fetch_locations (NUMBERED VERSION)
-// -----------------------------------------------
-if (result.action === 'fetch_locations' && lead) {
+    if (result.action === 'fetch_locations' && lead) {
   const locUpdate = { conversation_stage: 'fetching_locations' };
 
   if (result.updateFields?.Budget) locUpdate.budget = result.updateFields.Budget;
@@ -622,7 +619,6 @@ if (result.action === 'fetch_locations' && lead) {
     .update(locUpdate)
     .eq('id', lead.id);
 
-  // Send checking message first
   await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
   const interest = result.interest || lead.interest;
@@ -637,48 +633,47 @@ if (result.action === 'fetch_locations' && lead) {
 
   if (locData && locData.length > 0) {
 
-    // STEP 1: GET UNIQUE LOCATIONS
-    const locations = [...new Set(
-      locData.map(r => r.location).filter(Boolean)
-    )].sort();
+    const locations = [...new Set(locData.map(r => r.location).filter(Boolean))].sort();
 
-    // STEP 2: STORE LOCATIONS FOR NUMBER SELECTION
+    // 🔥 SAVE OPTIONS TO LEAD (THIS FIXES EVERYTHING)
     await supabase
       .from('leads')
       .update({
-        location_options: JSON.stringify(locations),
-        conversation_stage: 'asked_location'
+        location_options: JSON.stringify(locations)
       })
       .eq('id', lead.id);
 
-    // STEP 3: FORMAT AS NUMBERED LIST
     const formatted = locations
-      .map((loc, index) => `${index + 1}️⃣ ${loc}`)
+      .map((loc, i) => `${i + 1}️⃣ ${loc}`)
       .join('\n');
 
-    // STEP 4: SEND MESSAGE TO USER
+    await supabase
+      .from('leads')
+      .update({ conversation_stage: 'asked_location' })
+      .eq('id', lead.id);
+
     await sendMessage(
       tenantWhatsApp,
       from,
       `Which area are you interested in?\n\n` +
-      `We have properties in:\n\n${formatted}\n\n` +
-      `Reply with a number (e.g. 1, 2, 3)`
+      `We have properties in:\n\n` +
+      `${formatted}\n\n` +
+      `Reply with a number (e.g. 1, 2, 3).`
     );
 
   } else {
-
     await sendMessage(
       tenantWhatsApp,
       from,
-      `Sorry, no locations available for ${normalizedInterest} right now.\n\n` +
-      `Contact our agent for assistance.\n\n` +
-      `You can also reply HI to start a new search.`
+      `Sorry, no locations available right now.\n\n` +
+      `Contact our agent:\n` +
+      `${input.assigned_agent_name || "Our Agent"}\n` +
+      `${input.assigned_agent_phone || "N/A"}`
     );
   }
 
   return;
 }
-
     // -----------------------------------------------
     // ACTION: fetch_sizes
     // -----------------------------------------------
