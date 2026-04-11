@@ -323,6 +323,8 @@ router.post('/', async (req, res) => {
       lead_size: lead?.size || null,
       lead_name: lead?.name || null,
       lead_whatsapp: lead?.phone || null,
+      assigned_agent_name: assignedAgent.agent_name,
+      assigned_agent_phone: assignedAgent.phone,
       last_viewed_property: lead?.last_viewed_property || null,
       awaiting_followup_response: lead?.awaiting_followup_response || false,
       lead_is_offplan: lead?.is_offplan ?? null,

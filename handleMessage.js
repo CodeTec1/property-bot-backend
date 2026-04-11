@@ -15,6 +15,35 @@ function extractBedrooms(sizeStr) {
   return match ? parseInt(match[0]) : null;
 }
 
+// ============================================
+// Helper: Check if properties exist
+// ============================================
+async function checkPropertyExists(tenantId, filters) {
+  try {
+    let query = supabase
+      .from('properties')
+      .select('id')
+      .eq('tenant_id', tenantId)
+      .eq('available', true);
+
+    if (filters.type) {
+      query = query.ilike('type', filters.type);
+    }
+
+    if (filters.isOffplan !== undefined) {
+      query = query.eq('is_offplan', filters.isOffplan);
+    }
+
+    const { data } = await query.limit(1);
+
+    return data && data.length > 0;
+
+  } catch (err) {
+    console.error('Check property error:', err);
+    return false;
+  }
+}
+
 // handleMessage.js - Enhanced conversation logic with natural language support + Follow-up handler
 async function handleMessage(input) {
   try {
@@ -244,6 +273,31 @@ Reply with the name or number (e.g., Rent or 2).`;
 
       const selectedType = typeMapping[message];
 
+      // ======================================
+// CHECK IF TYPE EXISTS IN DB
+// ======================================
+const exists = await checkPropertyExists(input.tenant_id, {
+  type: selectedType
+});
+
+if (!exists) {
+  const agentName = input.assigned_agent_name || "Our Agent";
+  const agentPhone = input.assigned_agent_phone || "N/A";
+
+  response.action = "update";
+  response.updateFields = {
+    "Conversation Stage": "asked_buy_or_rent"
+  };
+
+  response.replyMessage =
+    `Currently, we don’t have ${selectedType.toLowerCase()} properties.\n\n` +
+    `You can reply HI to explore other options.\n\n` +
+    `Or contact our agent:\n` +
+    `${agentName}\n${agentPhone}`;
+
+  return response;
+}
+
       if (!selectedType) {
         const options = formatOptions(tenantTypes);
         response.action = "invalid";
@@ -395,6 +449,31 @@ Just the number is fine!`;
         return response;
       }
 
+      // CHECK READY PROPERTIES
+const exists = await checkPropertyExists(input.tenant_id, {
+  type: lead.Interest || input.lead_interest,
+  isOffplan: false
+});
+
+if (!exists) {
+  const agentName = input.assigned_agent_name || "Our Agent";
+  const agentPhone = input.assigned_agent_phone || "N/A";
+
+  response.action = "update";
+  response.updateFields = {
+    "Conversation Stage": "asked_offplan"
+  };
+
+  response.replyMessage =
+    `No ready properties available right now.\n\n` +
+    `We currently have off-plan options.\n\n` +
+    `Reply HI to search again\n` +
+    `or contact our agent:\n` +
+    `${agentName}\n${agentPhone}`;
+
+  return response;
+}
+
       if (isReady) {
         response.action = "update";
         response.updateFields = {
@@ -421,6 +500,30 @@ Just the number is fine!`;
           `Searching properties... 🔍`;
         return response;
       }
+
+      const offplanExists = await checkPropertyExists(input.tenant_id, {
+  type: lead.Interest || input.lead_interest,
+  isOffplan: true
+});
+
+if (!offplanExists) {
+  const agentName = input.assigned_agent_name || "Our Agent";
+  const agentPhone = input.assigned_agent_phone || "N/A";
+
+  response.action = "update";
+  response.updateFields = {
+    "Conversation Stage": "asked_offplan"
+  };
+
+  response.replyMessage =
+    `No off-plan properties available right now.\n\n` +
+    `We currently have ready properties.\n\n` +
+    `Reply HI to search again\n` +
+    `or contact our agent:\n` +
+    `${agentName}\n${agentPhone}`;
+
+  return response;
+}
 
       if (isOffplan) {
         response.action = "fetch_completion_dates";
@@ -590,11 +693,11 @@ if (stage === "asked_size") {
 
   try {
     budgetRange = await getBudgetRange(
-      tenant.id,
-      finalInterest,
-      finalLocation,
-      displaySize
-    );
+    input.tenant_id,
+    finalInterest,
+    finalLocation,
+    displaySize
+);
   } catch (err) {
     console.error("Error fetching budget range:", err);
   }
