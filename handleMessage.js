@@ -135,6 +135,7 @@ async function handleMessage(input) {
       Budget: input.lead_budget,
       Location: input.lead_location,
       Size: input.lead_size,
+      location_options: input.lead_location_options || null,
       IsOffplan: input.lead_is_offplan ?? null
     };
 

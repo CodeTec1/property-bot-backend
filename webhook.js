@@ -325,6 +325,7 @@ router.post('/', async (req, res) => {
       lead_whatsapp: lead?.phone || null,
       assigned_agent_name: lead?.assigned_agent_name || null,
       assigned_agent_phone: lead?.assigned_agent_phone || null,
+      lead_location_options: lead?.location_options || null,
       last_viewed_property: lead?.last_viewed_property || null,
       awaiting_followup_response: lead?.awaiting_followup_response || false,
       lead_is_offplan: lead?.is_offplan ?? null,
@@ -608,6 +609,10 @@ await sendMessage(
 
   return;
 }
+
+// -----------------------------------------------
+// ACTION: fetch_locations (NUMBERED VERSION)
+// -----------------------------------------------
     
 if (result.action === 'fetch_locations' && lead) {
   const locUpdate = { conversation_stage: 'fetching_locations' };
