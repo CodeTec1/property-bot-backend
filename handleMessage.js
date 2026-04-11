@@ -590,50 +590,87 @@ if (/^\d+$/.test(completionInput) && input.last_completion_options) {
       return response;
     }
 
-    // ======================================
-    // STAGE 4: LOCATION (Triggers size fetch)
-    // ======================================
-    if (stage === "asked_location") {
-      // Accept location in various formats
-      let location = message;
+// ======================================
+// STAGE 4: LOCATION (NUMBER + TEXT SUPPORT)
+// ======================================
+if (stage === "asked_location") {
 
-      // Clean up common prefixes
-      if (message.match(/in (.+)/i)) {
-        location = message.match(/in (.+)/i)[1];
-      } else if (message.match(/at (.+)/i)) {
-        location = message.match(/at (.+)/i)[1];
-      }
+  let locationOptions = [];
 
-      // Validate it's mostly letters
-      if (!location.match(/[a-zA-Z]{2,}/)) {
-        response.action = "invalid";
-        response.replyMessage = `Please choose a location from the list above.
+  // STEP 1: LOAD STORED LOCATION OPTIONS
+  try {
+    locationOptions = JSON.parse(lead.location_options || '[]');
+  } catch (e) {
+    locationOptions = [];
+  }
 
-Just type the area name (e.g., Westlands or Karen).`;
-        return response;
-      }
+  let location = null;
 
-      // Capitalize properly
-      location = location.trim()
-        .split(/\s+/)
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-        .join(' ');
+  // ======================================
+  // STEP 2: HANDLE NUMBER INPUT (NEW)
+  // ======================================
+  if (/^\d+$/.test(message)) {
+    const index = parseInt(message) - 1;
+    location = locationOptions[index];
+  }
 
-      const interest = lead.Interest || input.lead_interest;
+  // ======================================
+  // STEP 3: HANDLE TEXT INPUT (OLD SUPPORT)
+  // ======================================
+  if (!location) {
+    let cleanedMessage = message;
 
-      response.action = "fetch_sizes";
-      response.updateFields = {
-        "Location": location,
-        "Conversation Stage": "fetching_sizes"
-      };
-      
-      response.interest = interest;
-      response.location = location;
-      
-      response.replyMessage = `Perfect! 📍\n\nChecking what's available in ${location}... 🔍`;
-
-      return response;
+    // Clean up common prefixes
+    if (message.match(/in (.+)/i)) {
+      cleanedMessage = message.match(/in (.+)/i)[1];
+    } else if (message.match(/at (.+)/i)) {
+      cleanedMessage = message.match(/at (.+)/i)[1];
     }
+
+    // Normalize text input
+    location = cleanedMessage.trim()
+      .split(/\s+/)
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  // ======================================
+  // STEP 4: VALIDATION
+  // ======================================
+  if (!location || location.length < 2) {
+    response.action = "invalid";
+    response.replyMessage =
+      `Please choose a valid location from the list.\n\n` +
+      `Reply with the NUMBER (e.g. 1, 2, 3) or type the area name.`;
+    return response;
+  }
+
+  // ======================================
+  // STEP 5: GET INTEREST
+  // ======================================
+  const interest = lead.Interest || input.lead_interest;
+
+  // ======================================
+  // STEP 6: UPDATE LEAD
+  // ======================================
+  response.action = "fetch_sizes";
+  response.updateFields = {
+    "Location": location,
+    "Conversation Stage": "fetching_sizes"
+  };
+
+  response.interest = interest;
+  response.location = location;
+
+  // ======================================
+  // STEP 7: RESPONSE MESSAGE
+  // ======================================
+  response.replyMessage =
+    `Perfect! 📍\n\n` +
+    `Checking what's available in ${location}... 🔍`;
+
+  return response;
+}
 
   // ======================================
 // STAGE 5: SIZE (HOUSES)

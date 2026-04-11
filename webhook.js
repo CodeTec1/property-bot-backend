@@ -323,8 +323,8 @@ router.post('/', async (req, res) => {
       lead_size: lead?.size || null,
       lead_name: lead?.name || null,
       lead_whatsapp: lead?.phone || null,
-      assigned_agent_name: assignedAgent.agent_name,
-      assigned_agent_phone: assignedAgent.phone,
+      assigned_agent_name: lead?.assigned_agent_name || null,
+      assigned_agent_phone: lead?.assigned_agent_phone || null,
       last_viewed_property: lead?.last_viewed_property || null,
       awaiting_followup_response: lead?.awaiting_followup_response || false,
       lead_is_offplan: lead?.is_offplan ?? null,
@@ -609,60 +609,75 @@ await sendMessage(
   return;
 }
     // -----------------------------------------------
-    // ACTION: fetch_locations
-    // -----------------------------------------------
-    if (result.action === 'fetch_locations' && lead) {
-      const locUpdate = { conversation_stage: 'fetching_locations' };
-      if (result.updateFields?.Budget) locUpdate.budget = result.updateFields.Budget;
-      if (result.updateFields?.Name) locUpdate.name = result.updateFields.Name;
+// ACTION: fetch_locations (NUMBERED VERSION)
+// -----------------------------------------------
+if (result.action === 'fetch_locations' && lead) {
+  const locUpdate = { conversation_stage: 'fetching_locations' };
 
-      await supabase
-        .from('leads')
-        .update(locUpdate)
-        .eq('id', lead.id);
+  if (result.updateFields?.Budget) locUpdate.budget = result.updateFields.Budget;
+  if (result.updateFields?.Name) locUpdate.name = result.updateFields.Name;
 
-      // Send checking message first
-      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+  await supabase
+    .from('leads')
+    .update(locUpdate)
+    .eq('id', lead.id);
 
-      const interest = result.interest || lead.interest;
-      const normalizedInterest = normalize(interest);
+  // Send checking message first
+  await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      const { data: locData } = await supabase
-        .from('properties')
-        .select('location')
-        .eq('tenant_id', tenant.id)
-        .ilike('type', normalizedInterest)
-        .eq('available', true);
+  const interest = result.interest || lead.interest;
+  const normalizedInterest = normalize(interest);
 
-      if (locData && locData.length > 0) {
-        const locations = [...new Set(locData.map(r => r.location).filter(Boolean))].sort();
-        const formatted = locations.map(loc => `• ${loc}`).join('\n');
+  const { data: locData } = await supabase
+    .from('properties')
+    .select('location')
+    .eq('tenant_id', tenant.id)
+    .ilike('type', normalizedInterest)
+    .eq('available', true);
 
-        await supabase
-          .from('leads')
-          .update({ conversation_stage: 'asked_location' })
-          .eq('id', lead.id);
+  if (locData && locData.length > 0) {
 
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `Which area are you interested in?\n\n` +
-          `We have properties in:\n\n${formatted}\n\n` +
-          `Just type the area name.`
-        );
-      } else {
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `Sorry, no locations available for ${type} right now.\n\n` +
-            `Contact our agent for assistance.\n\n` +
-            `Agent: ${agentName}\n` +
-            `Phone: ${agentPhone || 'N/A'}\n\n` +
-            `You can also reply HI to start a new search.`
-        );
-      }
-      return;
-    }
+    // STEP 1: GET UNIQUE LOCATIONS
+    const locations = [...new Set(
+      locData.map(r => r.location).filter(Boolean)
+    )].sort();
+
+    // STEP 2: STORE LOCATIONS FOR NUMBER SELECTION
+    await supabase
+      .from('leads')
+      .update({
+        location_options: JSON.stringify(locations),
+        conversation_stage: 'asked_location'
+      })
+      .eq('id', lead.id);
+
+    // STEP 3: FORMAT AS NUMBERED LIST
+    const formatted = locations
+      .map((loc, index) => `${index + 1}️⃣ ${loc}`)
+      .join('\n');
+
+    // STEP 4: SEND MESSAGE TO USER
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Which area are you interested in?\n\n` +
+      `We have properties in:\n\n${formatted}\n\n` +
+      `Reply with a number (e.g. 1, 2, 3)`
+    );
+
+  } else {
+
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, no locations available for ${normalizedInterest} right now.\n\n` +
+      `Contact our agent for assistance.\n\n` +
+      `You can also reply HI to start a new search.`
+    );
+  }
+
+  return;
+}
 
     // -----------------------------------------------
     // ACTION: fetch_sizes
