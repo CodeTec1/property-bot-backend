@@ -290,9 +290,6 @@ router.post('/', async (req, res) => {
     // Look up tenant and lead
     const { tenant, lead } = await getTenantAndLead(to, from);
 
-    const agentPhone = lead?.assigned_agent_phone;
-    const agentName = lead?.assigned_agent_name || 'Our Agent';
-
     if (!tenant) {
       await sendMessage(to, from, 'Sorry, this service is not available on this number.');
       return;
@@ -836,12 +833,11 @@ nextStage = 'asked_size';
     }
 
     // -----------------------------------------------
-    // ACTION: create_booking — confirm the booking
-    // -----------------------------------------------
-   if (result.action === 'create_booking' && lead) {
+// ACTION: create_booking — confirm the booking
+// -----------------------------------------------
+if (result.action === 'create_booking' && lead) {
   await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-  // Fetch fresh lead data to get latest saved property ID and slot map
   const { data: freshLead } = await supabase
     .from('leads')
     .select('*')
@@ -886,10 +882,20 @@ nextStage = 'asked_size';
       .update({ conversation_stage: 'booking_confirmed' })
       .eq('id', lead.id);
 
-    // Confirm to user
     await sendMessage(tenantWhatsApp, from, bookingData.message);
 
-    // ✅ USE ASSIGNED AGENT (NO ROUND ROBIN HERE)
+    // 🔥 ALWAYS GET FRESH AGENT FROM DB
+    const { data: assignedLead } = await supabase
+      .from('leads')
+      .select('assigned_agent_phone, assigned_agent_name')
+      .eq('id', lead.id)
+      .single();
+
+    const agentPhone = assignedLead?.assigned_agent_phone;
+    const agentName = assignedLead?.assigned_agent_name || 'Our Agent';
+
+    console.log("Assigned agent (booking):", assignedLead);
+
     await sendTemplateToAgent(
       tenantWhatsApp,
       agentPhone,
@@ -939,6 +945,16 @@ nextStage = 'asked_size';
     await sendMessage(tenantWhatsApp, from, newSlotsData.message);
 
   } else {
+    // 🔥 GET AGENT AGAIN FOR FALLBACK
+    const { data: assignedLead } = await supabase
+      .from('leads')
+      .select('assigned_agent_phone, assigned_agent_name')
+      .eq('id', lead.id)
+      .single();
+
+    const agentPhone = assignedLead?.assigned_agent_phone;
+    const agentName = assignedLead?.assigned_agent_name || 'Our Agent';
+
     await sendMessage(
       tenantWhatsApp,
       from,
@@ -952,10 +968,10 @@ nextStage = 'asked_size';
   return;
 }
 
-    // -----------------------------------------------
-    // ACTION: cancel_booking
-    // -----------------------------------------------
-   if (result.action === 'cancel_booking' && lead) {
+// -----------------------------------------------
+// ACTION: cancel_booking
+// -----------------------------------------------
+if (result.action === 'cancel_booking' && lead) {
   await supabase
     .from('leads')
     .update({
@@ -985,7 +1001,15 @@ nextStage = 'asked_size';
     `Your viewing has been cancelled.\n\nReply HI to search for another property.`
   );
 
-  // ✅ USE ASSIGNED AGENT (NO ROUND ROBIN)
+  // 🔥 GET FRESH AGENT
+  const { data: assignedLead } = await supabase
+    .from('leads')
+    .select('assigned_agent_phone, assigned_agent_name')
+    .eq('id', lead.id)
+    .single();
+
+  const agentPhone = assignedLead?.assigned_agent_phone;
+
   await sendTemplateToAgent(
     tenantWhatsApp,
     agentPhone,
@@ -998,11 +1022,10 @@ nextStage = 'asked_size';
 
   return;
 }
-
     // -----------------------------------------------
-    // ACTION: followup_interested
-    // -----------------------------------------------
-    if (result.action === 'followup_interested' && lead) {
+// ACTION: followup_interested
+// -----------------------------------------------
+if (result.action === 'followup_interested' && lead) {
   await supabase
     .from('leads')
     .update({
@@ -1014,7 +1037,15 @@ nextStage = 'asked_size';
 
   await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-  // ✅ USE ASSIGNED AGENT (NO ROUND ROBIN)
+  // 🔥 GET FRESH AGENT
+  const { data: assignedLead } = await supabase
+    .from('leads')
+    .select('assigned_agent_phone, assigned_agent_name')
+    .eq('id', lead.id)
+    .single();
+
+  const agentPhone = assignedLead?.assigned_agent_phone;
+
   await sendTemplateToAgent(
     tenantWhatsApp,
     agentPhone,
