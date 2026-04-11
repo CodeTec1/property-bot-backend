@@ -1,5 +1,21 @@
-// handleMessage.js - Enhanced conversation logic with natural language support + Follow-up handler
+const supabase = require('./supabase');
 
+function normalize(text) {
+  if (!text) return '';
+  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+}
+
+function extractBedrooms(sizeStr) {
+  if (!sizeStr) return null;
+
+  // Check for studio first
+  if (sizeStr.toString().toLowerCase().includes('studio')) return 0;
+
+  const match = sizeStr.toString().match(/\d+/);
+  return match ? parseInt(match[0]) : null;
+}
+
+// handleMessage.js - Enhanced conversation logic with natural language support + Follow-up handler
 async function handleMessage(input) {
   try {
     // 1. Get input data
@@ -175,6 +191,43 @@ Reply with the name or number (e.g., Rent or 2).`;
 
       return response;
     }
+
+    async function getBudgetRange(tenantId, interest, location, size) {
+  try {
+    const normalizedInterest = normalize(interest);
+    const normalizedLocation = normalize(location);
+    const bedroomNumber = extractBedrooms(size);
+
+    let query = supabase
+      .from('properties')
+      .select('price')
+      .eq('tenant_id', tenantId)
+      .eq('available', true)
+      .ilike('type', normalizedInterest)
+      .ilike('location', normalizedLocation);
+
+    if (bedroomNumber !== null) {
+      query = query.eq('bedrooms', bedroomNumber);
+    }
+
+    const { data, error } = await query;
+
+    if (error || !data || data.length === 0) {
+      return null;
+    }
+
+    const prices = data.map(p => Number(p.price)).filter(Boolean);
+
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+
+    return { min, max };
+
+  } catch (err) {
+    console.error('Budget range error:', err);
+    return null;
+  }
+}
 
     // ======================================
     // STAGE 1: PROPERTY TYPE

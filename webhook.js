@@ -128,42 +128,6 @@ function extractBedrooms(sizeStr) {
   return match ? parseInt(match[0]) : null;
 }
 
-async function getBudgetRange(tenantId, interest, location, size) {
-  try {
-    const normalizedInterest = normalize(interest);
-    const normalizedLocation = normalize(location);
-    const bedroomNumber = extractBedrooms(size);
-
-    let query = supabase
-      .from('properties')
-      .select('price')
-      .eq('tenant_id', tenantId)
-      .eq('available', true)
-      .ilike('type', normalizedInterest)
-      .ilike('location', normalizedLocation);
-
-    if (bedroomNumber !== null) {
-      query = query.eq('bedrooms', bedroomNumber);
-    }
-
-    const { data, error } = await query;
-
-    if (error || !data || data.length === 0) {
-      return null;
-    }
-
-    const prices = data.map(p => Number(p.price)).filter(Boolean);
-
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
-
-    return { min, max };
-
-  } catch (err) {
-    console.error('Budget range error:', err);
-    return null;
-  }
-}
 
 // ============================================
 // Helper: Search properties from Supabase
@@ -579,15 +543,37 @@ if (result.action === 'update' && lead) {
         }
       }
 
-      console.log('All properties sent successfully');
+    for (let i = 0; i < properties.length; i++) {
+  const property = properties[i];
 
-      await sendMessage(
+  try {
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      propertyMessage,
+      property.photo_url || null
+    );
+
+    if (i < properties.length - 1) {
+      await delay(2000);
+    }
+
+  } catch (err) {
+    console.error(`Error sending property ${i + 1}`, err);
+  }
+}
+
+// ✅ GUARANTEED LAST MESSAGE
+console.log('All properties sent successfully');
+
+await delay(1000); // small buffer (VERY IMPORTANT)
+
+await sendMessage(
   tenantWhatsApp,
   from,
   `I’ve sent you ${properties.length} propert${properties.length === 1 ? 'y' : 'ies'}.\n\n` +
-  `To book a viewing:\n` +
   `Reply with the property number (e.g. 1, 2, 3)\n` +
-  `or type Property 1`
+  `or type Property 1 to book a viewing.`
 );
 
     } else {
