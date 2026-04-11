@@ -128,6 +128,43 @@ function extractBedrooms(sizeStr) {
   return match ? parseInt(match[0]) : null;
 }
 
+async function getBudgetRange(tenantId, interest, location, size) {
+  try {
+    const normalizedInterest = normalize(interest);
+    const normalizedLocation = normalize(location);
+    const bedroomNumber = extractBedrooms(size);
+
+    let query = supabase
+      .from('properties')
+      .select('price')
+      .eq('tenant_id', tenantId)
+      .eq('available', true)
+      .ilike('type', normalizedInterest)
+      .ilike('location', normalizedLocation);
+
+    if (bedroomNumber !== null) {
+      query = query.eq('bedrooms', bedroomNumber);
+    }
+
+    const { data, error } = await query;
+
+    if (error || !data || data.length === 0) {
+      return null;
+    }
+
+    const prices = data.map(p => Number(p.price)).filter(Boolean);
+
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+
+    return { min, max };
+
+  } catch (err) {
+    console.error('Budget range error:', err);
+    return null;
+  }
+}
+
 // ============================================
 // Helper: Search properties from Supabase
 // ============================================

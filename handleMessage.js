@@ -479,10 +479,10 @@ Just type the area name (e.g., Westlands or Karen).`;
       return response;
     }
 
-    // ======================================
-    // STAGE 5: SIZE (HOUSES)
-    // ======================================
-    if (stage === "asked_size") {
+  // ======================================
+// STAGE 5: SIZE (HOUSES)
+// ======================================
+if (stage === "asked_size") {
   let bedroomsStr = message;
   let bedrooms = null;
 
@@ -502,6 +502,7 @@ Just type the area name (e.g., Westlands or Karen).`;
     bedrooms = parseInt(bedroomsStr);
   }
 
+  // Validation
   if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedrooms > 20) {
     response.action = "invalid";
     response.replyMessage =
@@ -511,21 +512,58 @@ Just type the area name (e.g., Westlands or Karen).`;
     return response;
   }
 
+  // ======================================
+  // NEW: CLEAN VALUES
+  // ======================================
   const finalInterest = lead.Interest || input.lead_interest || "Not specified";
-  const finalBudget = lead.Budget || input.lead_budget || "Not specified";
   const finalLocation = lead.Location || input.lead_location || "Not specified";
   const displaySize = bedrooms === 0 ? 'Studio' : `${bedrooms} bedroom`;
 
+  // ======================================
+  // STEP 1: UPDATE LEAD
+  // ======================================
   response.action = "update";
   response.updateFields = {
     "Size": displaySize,
     "Conversation Stage": "asked_budget"
   };
+
   response.bedrooms = bedrooms;
-  response.replyMessage =
-    `Perfect! What is your budget in Ksh?\n\n` +
-    `Examples:\n• 50000\n• 10M\n• 500k\n\n` +
-    `Just type the amount!`;
+
+  // ======================================
+  // STEP 2: GET BUDGET RANGE FROM DB
+  // ======================================
+  let budgetRange = null;
+
+  try {
+    budgetRange = await getBudgetRange(
+      tenant.id,
+      finalInterest,
+      finalLocation,
+      displaySize
+    );
+  } catch (err) {
+    console.error("Error fetching budget range:", err);
+  }
+
+  // ======================================
+  // STEP 3: BUILD RESPONSE MESSAGE
+  // ======================================
+  if (budgetRange && budgetRange.min && budgetRange.max) {
+    response.replyMessage =
+      `Based on your selection:\n` +
+      `${finalLocation} • ${displaySize} • ${finalInterest}\n\n` +
+      `Available price range:\n` +
+      `💰 KES ${budgetRange.min.toLocaleString()} – KES ${budgetRange.max.toLocaleString()}\n\n` +
+      `What is your budget within this range?`;
+  } else {
+    // Fallback (VERY IMPORTANT)
+    response.replyMessage =
+      `Perfect! What is your budget in Ksh?\n\n` +
+      `Examples:\n• 50000\n• 10M\n• 500k\n\n` +
+      `Just type the amount!`;
+  }
+
   return response;
 }
 
