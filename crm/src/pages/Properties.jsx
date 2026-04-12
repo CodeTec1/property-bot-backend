@@ -2,6 +2,9 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../supabase'
 import Layout from '../components/Layout'
 
+const MAX_DESCRIPTION_LENGTH = 1000;
+const WARNING_LENGTH = 900;
+
 const TYPE_COLORS = {
   'Buy': { color: '#0088ff', bg: '#0088ff18' },
   'Rent': { color: '#10b981', bg: '#10b98118' },
@@ -155,6 +158,11 @@ export default function Properties({ user }) {
       alert('Please fill in property name, type and location.')
       return
     }
+
+    if (form.description && form.description.length > MAX_DESCRIPTION_LENGTH) {
+  alert('Description is too long. Please shorten it to under 1200 characters.');
+  return;
+}
 
     setSaving(true)
     try {
@@ -1123,17 +1131,28 @@ export default function Properties({ user }) {
   <textarea
     placeholder="Enter the full property description..."
     value={form.description}
-    onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
+    onChange={e => {
+  const value = e.target.value;
+
+  if (value.length <= MAX_DESCRIPTION_LENGTH) {
+    setForm(prev => ({ ...prev, description: value }));
+  }
+}}
     rows={6}
     style={{
       ...inputStyle,
       resize: 'vertical',
       minHeight: '120px',
       lineHeight: 1.6,
-      borderColor: form.description?.length > 3000
+      borderColor: form.description?.length > MAX_DESCRIPTION_LENGTH
+  ? '#ef4444'
+  : form.description?.length > WARNING_LENGTH
+    ? '#f59e0b'
+    : 'var(--border)'
         ? '#ef4444'
         : 'var(--border)'
     }}
+    maxLength={MAX_DESCRIPTION_LENGTH}
   />
   <div style={{
     display: 'flex',
@@ -1146,13 +1165,17 @@ export default function Properties({ user }) {
     <div style={{
       fontSize: '11px',
       fontWeight: '600',
-      color: form.description?.length > 3000
+      color: form.description?.length > MAX_DESCRIPTION_LENGTH
+  ? '#ef4444'
+  : form.description?.length > WARNING_LENGTH
+    ? '#f59e0b'
+    : 'var(--text-muted)'
         ? '#ef4444'
         : form.description?.length > 2000
           ? '#f59e0b'
           : 'var(--text-muted)'
     }}>
-      {form.description?.length || 0} chars
+      {form.description?.length || 0}/{MAX_DESCRIPTION_LENGTH} chars
     </div>
   </div>
 </div>

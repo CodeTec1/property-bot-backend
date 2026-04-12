@@ -556,7 +556,7 @@ if (result.action === 'update' && lead) {
         `To book a viewing, reply with the property number.\n` +
         `Example: *1*, *2*, *3* or *Property1*`
       );
-      
+
     } else {
       console.log('No properties found - notifying user and agent');
 
@@ -1127,6 +1127,24 @@ if (result.action === 'followup_interested' && lead) {
       await sendMessage(tenantWhatsApp, from, result.replyMessage);
       return;
     }
+
+    // -----------------------------------------------
+// ACTION: followup_decided (NEW - OPTION 3)
+// -----------------------------------------------
+if (result.action === 'followup_decided' && lead) {
+  await supabase
+    .from('leads')
+    .update({
+      awaiting_followup_response: false
+      // ❗ No status change
+      // ❗ No conversation_stage change
+    })
+    .eq('id', lead.id);
+
+  await sendMessage(tenantWhatsApp, from, result.replyMessage);
+
+  return;
+}
 
     // -----------------------------------------------
     // ACTION: invalid or anything else

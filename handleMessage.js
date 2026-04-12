@@ -56,74 +56,66 @@ async function handleMessage(input) {
     const leadExists = input.lead_id && input.lead_id.length > 0;
     const stage = input.lead_stage || null;
     
-    // ============================================
-    // FOLLOW-UP RESPONSE HANDLER (Route 8)
-    // ============================================
-    
-    // Check if lead is awaiting follow-up response
-    const awaitingFollowUp = input.awaiting_followup_response || false;
-    
-    if (leadExists && awaitingFollowUp && (message === '1' || message === '2')) {
-      console.log('Follow-up response detected!');
-      
-      const leadName = input.lead_name || "there";
-      const leadPhone = phone;
-      const tenantWhatsApp = input.tenant_whatsapp || "";
-      const lastViewedProperty = input.last_viewed_property || "a property"; // Property name from last booking
-      
-      console.log('Last Viewed Property:', lastViewedProperty);
-      
-      if (message === '1') {
-        // User is INTERESTED!
-        
-        // Get agent phone from the last booking for this lead
-        let agentPhone = null;
-        try {
-          const recentBookings = await base('Bookings')
-            .select({
-              filterByFormula: `SEARCH("${leadId}", ARRAYJOIN({Lead}, ","))`,
-              sort: [{ field: 'Created', direction: 'desc' }],
-              maxRecords: 1
-            })
-            .firstPage();
-          
-          if (recentBookings.length > 0) {
-            agentPhone = recentBookings[0].get('Agent Phone');
-          }
-        } catch (err) {
-          console.error('Failed to get agent phone:', err);
-        }
-        
-        return {
-          action: "followup_interested",
-          updateFields: {
-            "Status": "Hot Lead",
-            "Conversation Stage": "interested_after_viewing",
-            "AwaitingFollowUpResponse": false
-          },
-          replyMessage: `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`,
-          agentNotification: {
-            agentPhone: agentPhone, // ← Agent's phone
-            message: `🔥 *HOT LEAD ALERT!*\n\n${leadName} is INTERESTED after viewing!\n\nProperty: ${lastViewedProperty}\n\n📞 Contact them ASAP: ${leadPhone}\n\nStrike while the iron is hot! 🎯`,
-            sendTo: tenantWhatsApp, // ← For future use
-            leadName: leadName,
-            leadPhone: leadPhone,
-            propertyName: lastViewedProperty
-          }
-        };
-      } else if (message === '2') {
-        // User is NOT interested
-        return {
-          action: "followup_not_interested",
-          updateFields: {
-            "Status": "Not Interested",
-            "Conversation Stage": "not_interested_after_viewing",
-            "AwaitingFollowUpResponse": false
-          },
-          replyMessage: `Thank you for your feedback! 🙏\n\nIf you change your mind, just reply HI anytime.\n\nWe're always here to help! 🏡`
-        };
-      }
-    }
+// ============================================
+// FOLLOW-UP RESPONSE HANDLER (Route 8)
+// ============================================
+
+// Check if lead is awaiting follow-up response
+const awaitingFollowUp = input.awaiting_followup_response || false;
+
+if (leadExists && awaitingFollowUp && (message === '1' || message === '2' || message === '3')) {
+  console.log('Follow-up response detected!');
+  
+  const leadName = input.lead_name || "there";
+  const leadPhone = phone;
+  const tenantWhatsApp = input.tenant_whatsapp || "";
+  const lastViewedProperty = input.last_viewed_property || "a property";
+
+  console.log('Last Viewed Property:', lastViewedProperty);
+
+  // ============================================
+  // OPTION 1: INTERESTED
+  // ============================================
+  if (message === '1') {
+    return {
+      action: "followup_interested",
+      updateFields: {
+        "Status": "Hot Lead",
+        "Conversation Stage": "interested_after_viewing",
+        "AwaitingFollowUpResponse": false
+      },
+      replyMessage: `Great! 🎉\n\nOur agent will contact you shortly to discuss next steps!\n\nReply HI anytime to search for more properties.`
+    };
+  }
+
+  // ============================================
+  // OPTION 2: NOT INTERESTED
+  // ============================================
+  else if (message === '2') {
+    return {
+      action: "followup_not_interested",
+      updateFields: {
+        "Status": "Not Interested",
+        "Conversation Stage": "not_interested_after_viewing",
+        "AwaitingFollowUpResponse": false
+      },
+      replyMessage: `Thank you for your feedback! 🙏\n\nIf you change your mind, just reply HI anytime.\n\nWe're always here to help! 🏡`
+    };
+  }
+
+  // ============================================
+  // OPTION 3: ALREADY DECIDED
+  // ============================================
+  else if (message === '3') {
+    return {
+      action: "followup_decided",
+      updateFields: {
+        "AwaitingFollowUpResponse": false
+      },
+      replyMessage: `Thank you for letting us know 😊\n\nIf you ever need help again, just reply HI anytime. We're always here for you! 🏡`
+    };
+  }
+}
     
     // ============================================
     // END FOLLOW-UP HANDLER - Continue normal flow
