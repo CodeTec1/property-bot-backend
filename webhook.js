@@ -546,39 +546,17 @@ if (result.action === 'update' && lead) {
         }
       }
 
-    for (let i = 0; i < properties.length; i++) {
-  const property = properties[i];
-
-  try {
-    await sendMessage(
-      tenantWhatsApp,
-      from,
-      propertyMessage,
-      property.photo_url || null
-    );
-
-    if (i < properties.length - 1) {
-      await delay(2000);
-    }
-
-  } catch (err) {
-    console.error(`Error sending property ${i + 1}`, err);
-  }
-}
-
-// ✅ GUARANTEED LAST MESSAGE
-console.log('All properties sent successfully');
-
-await delay(1000); // small buffer (VERY IMPORTANT)
-
-await sendMessage(
-  tenantWhatsApp,
-  from,
-  `I’ve sent you ${properties.length} propert${properties.length === 1 ? 'y' : 'ies'}.\n\n` +
-  `Reply with the property number (e.g. 1, 2, 3)\n` +
-  `or type Property 1 to book a viewing.`
-);
-
+      // Summary message AFTER all properties are sent
+      console.log('All properties sent successfully');
+      await delay(1000);
+      await sendMessage(
+        tenantWhatsApp,
+        from,
+        `I've sent you ${properties.length} propert${properties.length === 1 ? 'y' : 'ies'}. 🏡\n\n` +
+        `To book a viewing, reply with the property number.\n` +
+        `Example: *1*, *2*, *3* or *Property1*`
+      );
+      
     } else {
       console.log('No properties found - notifying user and agent');
 

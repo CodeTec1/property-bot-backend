@@ -750,7 +750,8 @@ if (stage === "asked_size") {
       `${finalLocation} • ${displaySize} • ${finalInterest}\n\n` +
       `Available price range:\n` +
       `💰 KES ${budgetRange.min.toLocaleString()} – KES ${budgetRange.max.toLocaleString()}\n\n` +
-      `What is your budget within this range?`;
+      `What is your budget within this range? \n\n` +
+      `Just typeyour price. eg 5M,50k,9000000.`;
   } else {
     // Fallback (VERY IMPORTANT)
     response.replyMessage =
