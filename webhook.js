@@ -693,19 +693,19 @@ if (result.action === 'fetch_locations' && lead) {
           nextStage = 'asked_land_size';
         } else {
         const beds = [
-  ...new Set(
-    sizeData
-      .map(r => parseInt(r.bedrooms))
-      .filter(n => !isNaN(n))
-  )
-].sort((a, b) => a - b);
+          ...new Set(
+            sizeData
+              .map(r => parseInt(r.bedrooms))
+              .filter(n => !isNaN(n))
+          )
+        ].sort((a, b) => a - b);
 
-options = beds.map(b => {
-  if (b === 0) return `• Studio`;
-  return `• ${b} Bedroom${b > 1 ? 's' : ''}`;
-}).join('\n');
+        options = beds.map(b => {
+          if (b === 0) return `• Studio`;
+          return `• ${b} Bedroom${b > 1 ? 's' : ''}`;
+        }).join('\n');
 
-nextStage = 'asked_size';
+        nextStage = 'asked_size';
         }
 
         await supabase
@@ -714,9 +714,15 @@ nextStage = 'asked_size';
           .eq('id', lead.id);
 
         // Different question for land vs house
+        const hasStudio = beds.includes(0);
+
+        const bedroomInstruction = hasStudio
+          ? `Reply with:\n• *Studio*\n• or a number (e.g., ${beds.filter(b => b > 0).slice(0, 2).join(', ')})`
+          : `Just type the number (e.g., ${beds.slice(0, 2).join(', ')})`;
+
         const sizeQuestion = normalizedInterest === 'Land'
           ? `What plot size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
-          : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\nJust type the number.`;
+          : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\n${bedroomInstruction}`;
 
         await sendMessage(tenantWhatsApp, from, sizeQuestion);
 

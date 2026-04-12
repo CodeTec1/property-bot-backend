@@ -950,37 +950,85 @@ app.post('/api/create-booking', async (req, res) => {
 
     console.log('Property found:', propertyName);
 
-    // 5. CREATE GOOGLE CALENDAR EVENT
-    console.log('Creating calendar event...');
+    // ============================================
+// 5. CREATE GOOGLE CALENDAR EVENT
+// ============================================
+console.log('Creating calendar event...');
 
-    const event = {
-      summary: `${companyName} - Property Viewing`,
-      description: `Property: ${propertyName}\nClient: ${leadName}\nPhone: ${leadPhone}\nProperty ID: ${propertyId}\n\nAgent: ${agentName || 'N/A'}\nAgent Phone: ${agentPhone || 'N/A'}`,
-      location: propertyAddress,
-      start: {
-        dateTime: slotStart.toISOString(),
-        timeZone: timezone
-      },
-      end: {
-        dateTime: slotEnd.toISOString(),
-        timeZone: timezone
-      }
-    };
+// 1. Get agent email for calendar invite
+let agentForCalendar = null;
+try {
+  const { data } = await supabase
+    .from('agents')
+    .select('email, agent_name')
+    .eq('id', booking.agent_id || agentId)
+    .single();
 
-    let calendarEvent;
-    try {
-      calendarEvent = await calendar.events.insert({
-        calendarId: calendarId,
-        resource: event
-      });
-      console.log('Calendar event created:', calendarEvent.data.id);
-    } catch (calErr) {
-      console.error('Calendar creation failed:', calErr.message);
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to create calendar event: ' + calErr.message
-      });
-    }
+  agentForCalendar = data;
+} catch (err) {
+  console.error('Failed to fetch agent email:', err.message);
+}
+
+// 2. Create event object
+const event = {
+  summary: `${companyName} - Property Viewing`,
+
+  // 🔥 PREMIUM DESCRIPTION (clean + useful)
+  description: `
+Property: ${propertyName}
+Client: ${leadName}
+Phone: ${leadPhone}
+Location: ${propertyAddress}
+
+Agent: ${agentName || 'N/A'}
+Agent Phone: ${agentPhone || 'N/A'}
+Property ID: ${propertyId}
+`,
+
+  location: propertyAddress,
+
+  start: {
+    dateTime: slotStart.toISOString(),
+    timeZone: timezone
+  },
+
+  end: {
+    dateTime: slotEnd.toISOString(),
+    timeZone: timezone
+  },
+
+  // ✅ Add assigned agent ONLY
+  attendees: agentForCalendar?.email
+    ? [
+        {
+          email: agentForCalendar.email,
+          displayName: agentForCalendar.agent_name || 'Agent'
+        }
+      ]
+    : [],
+
+  // ✅ Send email invite automatically
+  sendUpdates: 'all'
+};
+
+// 3. Create calendar event
+let calendarEvent;
+try {
+  calendarEvent = await calendar.events.insert({
+    calendarId: calendarId,
+    resource: event,
+    sendUpdates: 'all' // important for notifications
+  });
+
+  console.log('Calendar event created:', calendarEvent.data.id);
+
+} catch (calErr) {
+  console.error('Calendar creation failed:', calErr.message);
+  return res.status(500).json({
+    success: false,
+    error: 'Failed to create calendar event: ' + calErr.message
+  });
+}
 
     // 6. CREATE SUPABASE BOOKING
     console.log('Creating Supabase booking...');
