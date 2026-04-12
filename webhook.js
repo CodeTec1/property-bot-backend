@@ -686,6 +686,7 @@ if (result.action === 'fetch_locations' && lead) {
       if (sizeData && sizeData.length > 0) {
         let options = '';
         let nextStage = '';
+        let beds = []; 
 
         if (normalizedInterest === 'Land') {
           const plots = [...new Set(sizeData.map(r => r.plot_size).filter(Boolean))];
