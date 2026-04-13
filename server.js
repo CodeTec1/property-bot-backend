@@ -946,44 +946,56 @@ app.post('/api/create-booking', async (req, res) => {
     const propertyAddress = property.address;
     const agentName = property.agents?.agent_name || null;
     const agentPhone = property.agents?.phone || null;
-    const agentEmail = property.agents?.email || null;
+    let agentEmail = property.agents?.email || null;
 
     console.log('Property found:', propertyName);
 
-    // ============================================
+// ============================================
 // 5. CREATE GOOGLE CALENDAR EVENT
 // ============================================
 console.log('Creating calendar event...');
 
-// 1. Get agent email for calendar invite
-let agentForCalendar = null;
-try {
-  const { data } = await supabase
-    .from('agents')
-    .select('email, agent_name')
-    .eq('id', booking.agent_id || agentId)
-    .single();
+// ✅ Enhance agent email if missing or unreliable
+let agentDisplayName = agentName;
 
-  agentForCalendar = data;
+try {
+  if (!agentEmail && agentName) {
+    const { data: agentRecord, error: agentError } = await supabase
+      .from('agents')
+      .select('email, agent_name')
+      .eq('tenant_id', tenantId)
+      .ilike('agent_name', agentName)
+      .single();
+
+    if (agentError) {
+      console.error('Agent fetch error:', agentError.message);
+    }
+
+    if (agentRecord?.email) {
+      agentEmail = agentRecord.email;
+      agentDisplayName = agentRecord.agent_name;
+      console.log('✅ Agent email fetched from agents table:', agentEmail);
+    } else {
+      console.log('⚠️ No agent email found for:', agentName);
+    }
+  } else {
+    console.log('✅ Using agent email from property relation:', agentEmail);
+  }
 } catch (err) {
   console.error('Failed to fetch agent email:', err.message);
 }
 
-// 2. Create event object
+// ✅ Create event
 const event = {
   summary: `${companyName} - Property Viewing`,
 
-  // 🔥 PREMIUM DESCRIPTION (clean + useful)
-  description: `
-Property: ${propertyName}
-Client: ${leadName}
-Phone: ${leadPhone}
-Location: ${propertyAddress}
-
-Agent: ${agentName || 'N/A'}
-Agent Phone: ${agentPhone || 'N/A'}
-Property ID: ${propertyId}
-`,
+  description:
+    `Property: ${propertyName}\n` +
+    `Client: ${leadName}\n` +
+    `Phone: ${leadPhone}\n` +
+    `Location: ${propertyAddress}\n\n` +
+    `Agent: ${agentName || 'N/A'}\n` +
+    `Agent Phone: ${agentPhone || 'N/A'}`,
 
   location: propertyAddress,
 
@@ -997,33 +1009,39 @@ Property ID: ${propertyId}
     timeZone: timezone
   },
 
-  // ✅ Add assigned agent ONLY
-  attendees: agentForCalendar?.email
+  attendees: agentEmail
     ? [
         {
-          email: agentForCalendar.email,
-          displayName: agentForCalendar.agent_name || 'Agent'
+          email: agentEmail,
+          displayName: agentDisplayName || agentName
         }
       ]
     : [],
 
-  // ✅ Send email invite automatically
-  sendUpdates: 'all'
+  sendUpdates: 'all',
+
+  reminders: {
+    useDefault: false,
+    overrides: [
+      { method: 'email', minutes: 24 * 60 },
+      { method: 'popup', minutes: 60 }
+    ]
+  }
 };
 
-// 3. Create calendar event
+// ✅ Create calendar event
 let calendarEvent;
 try {
   calendarEvent = await calendar.events.insert({
     calendarId: calendarId,
     resource: event,
-    sendUpdates: 'all' // important for notifications
+    sendUpdates: 'all'
   });
 
-  console.log('Calendar event created:', calendarEvent.data.id);
+  console.log('✅ Calendar event created:', calendarEvent.data.id);
 
 } catch (calErr) {
-  console.error('Calendar creation failed:', calErr.message);
+  console.error('❌ Calendar creation failed:', calErr.message);
   return res.status(500).json({
     success: false,
     error: 'Failed to create calendar event: ' + calErr.message

@@ -538,7 +538,7 @@ if (result.action === 'update' && lead) {
 
           console.log(`Property ${i + 1} sent successfully`);
 
-          if (i < properties.length - 1) await delay(2000);
+          if (i < properties.length - 1) await delay(3000);
 
         } catch (propError) {
           console.error(`Error sending property ${i + 1}:`, propError.message);
@@ -548,7 +548,8 @@ if (result.action === 'update' && lead) {
 
       // Summary message AFTER all properties are sent
       console.log('All properties sent successfully');
-      await delay(1000);
+      // Wait longer to ensure all messages including images have been delivered
+      await delay(properties.length * 1500);
       await sendMessage(
         tenantWhatsApp,
         from,
@@ -719,7 +720,7 @@ if (result.action === 'fetch_locations' && lead) {
 
         const bedroomInstruction = hasStudio
           ? `Reply with:\n• *Studio*\n• or a number (e.g., ${beds.filter(b => b > 0).slice(0, 2).join(', ')})`
-          : `Just type the number (e.g., ${beds.slice(0, 2).join(', ')})`;
+          : `Just type the number eg 1,2,3`;
 
         const sizeQuestion = normalizedInterest === 'Land'
           ? `What plot size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
