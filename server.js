@@ -921,19 +921,52 @@ app.post('/api/create-booking', async (req, res) => {
 
     console.log('Slot is free, proceeding...');
 
+    // ============================================
+// GET ASSIGNED AGENT (ROUND ROBIN)
+// ============================================
+const { data: leadData, error: leadFetchError } = await supabase
+  .from('leads')
+  .select('assigned_agent_id')
+  .eq('id', leadId)
+  .single();
+
+if (leadFetchError) {
+  console.error('Failed to fetch lead:', leadFetchError);
+  throw leadFetchError;
+}
+
+let agentName = null;
+let agentPhone = null;
+let agentEmail = null;
+
+if (leadData?.assigned_agent_id) {
+  const { data: assignedAgent, error: agentError } = await supabase
+    .from('agents')
+    .select('agent_name, phone, email')
+    .eq('id', leadData.assigned_agent_id)
+    .single();
+
+  if (agentError) {
+    console.error('Failed to fetch assigned agent:', agentError);
+  }
+
+  agentName = assignedAgent?.agent_name || null;
+  agentPhone = assignedAgent?.phone || null;
+  agentEmail = assignedAgent?.email || null;
+
+  console.log('✅ Using ROUND ROBIN agent:', agentName, agentEmail);
+} else {
+  console.log('⚠️ No assigned agent found on lead');
+}
+
     // 4. GET PROPERTY AND AGENT DETAILS
     const { data: property, error: propertyError } = await supabase
       .from('properties')
       .select(`
-        property_name,
-        address,
-        price,
-        agents (
-          agent_name,
-          phone,
-          email
-        )
-      `)
+  property_name,
+  address,
+  price
+`)
       .eq('id', propertyId)
       .single();
 
@@ -944,9 +977,7 @@ app.post('/api/create-booking', async (req, res) => {
 
     const propertyName = property.property_name;
     const propertyAddress = property.address;
-    const agentName = property.agents?.agent_name || null;
-    const agentPhone = property.agents?.phone || null;
-    let agentEmail = property.agents?.email || null;
+    
 
     console.log('Property found:', propertyName);
 
