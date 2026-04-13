@@ -1040,15 +1040,6 @@ const event = {
     timeZone: timezone
   },
 
-  attendees: agentEmail
-    ? [
-        {
-          email: agentEmail,
-          displayName: agentDisplayName || agentName
-        }
-      ]
-    : [],
-
   sendUpdates: 'all',
 
   reminders: {

@@ -657,90 +657,109 @@ if (result.action === 'fetch_locations' && lead) {
   return;
 }
     // -----------------------------------------------
-    // ACTION: fetch_sizes
-    // -----------------------------------------------
-    if (result.action === 'fetch_sizes' && lead) {
-      await supabase
-        .from('leads')
-        .update({
-          location: result.location,
-          conversation_stage: 'fetching_sizes'
-        })
-        .eq('id', lead.id);
+// ACTION: fetch_sizes (FIXED STUDIO LOGIC)
+// -----------------------------------------------
+if (result.action === 'fetch_sizes' && lead) {
 
-      // Send checking message first
-      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+  await supabase
+    .from('leads')
+    .update({
+      location: result.location,
+      conversation_stage: 'fetching_sizes'
+    })
+    .eq('id', lead.id);
 
-      const interest = lead.interest || '';
-      const location = result.location || lead.location || '';
-      const normalizedInterest = normalize(interest);
-      const normalizedLocation = normalize(location);
+  await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-      const { data: sizeData } = await supabase
-        .from('properties')
-        .select('bedrooms, plot_size, type')
-        .eq('tenant_id', tenant.id)
-        .ilike('type', normalizedInterest)
-        .ilike('location', normalizedLocation)
-        .eq('available', true);
+  const interest = lead.interest || '';
+  const location = result.location || lead.location || '';
+  const normalizedInterest = normalize(interest);
+  const normalizedLocation = normalize(location);
 
-      if (sizeData && sizeData.length > 0) {
-        let options = '';
-        let nextStage = '';
-        let beds = []; 
+  const { data: sizeData } = await supabase
+    .from('properties')
+    .select('bedrooms, plot_size, type')
+    .eq('tenant_id', tenant.id)
+    .ilike('type', normalizedInterest)
+    .ilike('location', normalizedLocation)
+    .eq('available', true);
 
-        if (normalizedInterest === 'Land') {
-          const plots = [...new Set(sizeData.map(r => r.plot_size).filter(Boolean))];
-          options = plots.map(p => `• ${p}`).join('\n');
-          nextStage = 'asked_land_size';
-        } else {
-        const beds = [
-          ...new Set(
-            sizeData
-              .map(r => parseInt(r.bedrooms))
-              .filter(n => !isNaN(n))
-          )
-        ].sort((a, b) => a - b);
+  if (!sizeData || sizeData.length === 0) {
+    await sendMessage(
+      tenantWhatsApp,
+      from,
+      `Sorry, no properties available in ${location} right now.\n\n` +
+      `Contact our agent:\n` +
+      `Agent: ${agentName}\n` +
+      `Phone: ${agentPhone || 'N/A'}\n\n` +
+      `Reply HI to restart.`
+    );
+    return;
+  }
 
-        options = beds.map(b => {
-          if (b === 0) return `• Studio`;
-          return `• ${b} Bedroom${b > 1 ? 's' : ''}`;
-        }).join('\n');
+  // ============================
+  // EXTRACT BEDROOMS CLEANLY
+  // ============================
+  const allBeds = sizeData
+    .map(r => Number(r.bedrooms))
+    .filter(n => !isNaN(n));
 
-        nextStage = 'asked_size';
-        }
+  const uniqueBeds = [...new Set(allBeds)].sort((a, b) => a - b);
 
-        await supabase
-          .from('leads')
-          .update({ conversation_stage: nextStage })
-          .eq('id', lead.id);
+  const hasStudio = uniqueBeds.includes(0);
 
-        // Different question for land vs house
-        const hasStudio = beds.includes(0);
+  // ============================
+  // BUILD OPTIONS TEXT
+  // ============================
+  let options = '';
 
-        const bedroomInstruction = hasStudio
-          ? `Reply with:\n• *Studio*\n• or a number (e.g., ${beds.filter(b => b > 0).slice(0, 2).join(', ')})`
-          : `Just type the number eg 1,2,3`;
+  if (hasStudio) {
+    options = uniqueBeds
+      .map(b => b === 0 ? '• Studio' : `• ${b} Bedroom${b > 1 ? 's' : ''}`)
+      .join('\n');
+  } else {
+    options = uniqueBeds
+      .filter(b => b > 0)
+      .map(b => `• ${b} Bedroom${b > 1 ? 's' : ''}`)
+      .join('\n');
+  }
 
-        const sizeQuestion = normalizedInterest === 'Land'
-          ? `What plot size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
-          : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\n${bedroomInstruction}`;
+  // ============================
+  // NEXT STAGE
+  // ============================
+  const nextStage = normalizedInterest === 'Land'
+    ? 'asked_land_size'
+    : 'asked_size';
 
-        await sendMessage(tenantWhatsApp, from, sizeQuestion);
+  await supabase
+    .from('leads')
+    .update({ conversation_stage: nextStage })
+    .eq('id', lead.id);
 
-      } else {
-        await sendMessage(
-          tenantWhatsApp,
-          from,
-          `Sorry, no properties available in ${location} right now.\n\n` + 
-          `Contact our agent for assistance.\n\n` +
-          `Agent: ${agentName}\n` +
-          `Phone: ${agentPhone || 'N/A'}\n\n` +
-          `You can also reply HI to start a new search.`
-        );
-      }
-      return;
-    }
+  // ============================
+  // MESSAGE LOGIC (FIXED)
+  // ============================
+  let instruction = '';
+
+  if (hasStudio) {
+    instruction =
+      `Reply with:\n` +
+      `• Studio\n` +
+      `• or a number (e.g., ${uniqueBeds.filter(b => b > 0).slice(0, 2).join(', ')})`;
+  } else {
+    instruction =
+      `Just type the number (e.g., ${uniqueBeds.slice(0, 2).join(', ')})`;
+  }
+
+  const sizeQuestion =
+    normalizedInterest === 'Land'
+      ? `What plot size are you looking for?\n\nAvailable sizes:\n\n${options}\n\nJust type the size.`
+      : `How many bedrooms are you looking for?\n\nAvailable options:\n\n${options}\n\n${instruction}`;
+
+  await sendMessage(tenantWhatsApp, from, sizeQuestion);
+
+  return;
+}
 
     // -----------------------------------------------
     // ACTION: fetch_completion_dates
