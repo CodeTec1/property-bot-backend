@@ -940,28 +940,28 @@ app.post('/api/create-booking', async (req, res) => {
       });
     }
 
-    console.log('Slot is free, proceeding...');
+console.log('Slot is free, proceeding...');
 
-// ============================================
-// GET AGENT FROM AGENTS TABLE
-// ============================================
-let agentName = null;
-let agentPhone = null;
+    // ============================================
+    // GET AGENT FROM AGENTS TABLE
+    // ============================================
+    let agentName = null;
+    let agentPhone = null;
 
-const { data: agentData, error: agentFetchError } = await supabase
-  .from('agents')
-  .select('agent_name, phone')
-  .eq('tenant_id', tenantId)
-  .eq('active', true)
-  .single();
+    const { data: agentData, error: agentFetchError } = await supabase
+      .from('agents')
+      .select('agent_name, phone')
+      .eq('tenant_id', tenantId)
+      .eq('active', true)
+      .single();
 
-if (agentFetchError) {
-  console.error('Failed to fetch agent:', agentFetchError);
-} else {
-  agentName = agentData?.agent_name || null;
-  agentPhone = agentData?.phone || null;
-  console.log('Agent found:', agentName, agentPhone);
-}
+    if (agentFetchError) {
+      console.error('Failed to fetch agent:', agentFetchError);
+    } else {
+      agentName = agentData?.agent_name || null;
+      agentPhone = agentData?.phone || null;
+      console.log('Agent found:', agentName, agentPhone);
+    }
 
     // 4. GET PROPERTY AND AGENT DETAILS
     const { data: property, error: propertyError } = await supabase

@@ -8,10 +8,11 @@ function normalize(text) {
 function extractBedrooms(sizeStr) {
   if (!sizeStr) return null;
 
-  // Check for studio first
-  if (sizeStr.toString().toLowerCase().includes('studio')) return 0;
+  const str = sizeStr.toString().toLowerCase().trim();
 
-  const match = sizeStr.toString().match(/\d+/);
+  if (str.includes('studio')) return 0;
+
+  const match = str.match(/\d+/);
   return match ? parseInt(match[0]) : null;
 }
 
@@ -219,9 +220,13 @@ Reply with the name or number (e.g., Buy or 1).`;
       .ilike('type', normalizedInterest)
       .ilike('location', normalizedLocation);
 
-    if (bedroomNumber !== null) {
-      query = query.eq('bedrooms', bedroomNumber);
-    }
+if (bedroomNumber !== null) {
+  if (bedroomNumber === 0) {
+    query = query.eq('bedrooms', 0);
+  } else {
+    query = query.eq('bedrooms', bedroomNumber);
+  }
+}
 
     const { data, error } = await query;
 
@@ -725,7 +730,7 @@ if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedro
   // ======================================
   const finalInterest = lead.Interest || input.lead_interest || "Not specified";
   const finalLocation = lead.Location || input.lead_location || "Not specified";
-  const displaySize = bedrooms === 0 ? 'Studio' : `${bedrooms} bedroom`;
+  const displaySize = bedrooms === 0 ? 'Studio' : `${bedrooms} Bedroom${bedrooms > 1 ? 's' : ''}`;
 
   // ======================================
   // STEP 1: UPDATE LEAD
@@ -738,21 +743,24 @@ if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedro
 
   response.bedrooms = bedrooms;
 
-  // ======================================
-  // STEP 2: GET BUDGET RANGE FROM DB
-  // ======================================
-  let budgetRange = null;
+ // ======================================
+// STEP 2: GET BUDGET RANGE FROM DB
+// ======================================
+let budgetRange = null;
 
-  try {
-    budgetRange = await getBudgetRange(
+// ✅ FIX: Ensure Studio is handled correctly
+const isStudioFlow = bedrooms === 0;
+
+try {
+  budgetRange = await getBudgetRange(
     input.tenant_id,
     finalInterest,
     finalLocation,
-    displaySize
-);
-  } catch (err) {
-    console.error("Error fetching budget range:", err);
-  }
+    bedrooms // 
+  );
+} catch (err) {
+  console.error("Error fetching budget range:", err);
+}
 
   // ======================================
   // STEP 3: BUILD RESPONSE MESSAGE
