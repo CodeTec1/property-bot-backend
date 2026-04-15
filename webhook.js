@@ -233,47 +233,6 @@ function formatKenyaTime(isoString) {
   });
 }
 
-async function getNextAgentRoundRobin(tenantId) {
-  // Step 1: get all active agents
-  const { data: agents } = await supabase
-    .from('agents')
-    .select('id, agent_name, phone')
-    .eq('tenant_id', tenantId)
-    .eq('active', true)
-    .order('created_at', { ascending: true });
-
-  if (!agents || agents.length === 0) {
-    console.log('No agents found for tenant');
-    return null;
-  }
-
-  // Step 2: get tenant pointer
-  const { data: tenantData } = await supabase
-    .from('tenants')
-    .select('last_assigned_agent_index')
-    .eq('id', tenantId)
-    .single();
-
-  let index = tenantData?.last_assigned_agent_index || 0;
-
-  // Step 3: pick agent
-  const agent = agents[index % agents.length];
-
-  // Step 4: update pointer
-  const nextIndex = (index + 1) % agents.length;
-
-  await supabase
-    .from('tenants')
-    .update({
-      last_assigned_agent_index: nextIndex
-    })
-    .eq('id', tenantId);
-
-  console.log('Round robin agent selected:', agent.agent_name);
-
-  return agent;
-}
-
 // ============================================
 // WEBHOOK: Receive WhatsApp messages from Twilio
 // ============================================
@@ -297,6 +256,17 @@ router.post('/', async (req, res) => {
     }
 
     const tenantWhatsApp = tenant.whatsapp_number;
+
+    // Get agent details from agents table
+    const { data: agentData } = await supabase
+      .from('agents')
+      .select('agent_name, phone, email')
+      .eq('tenant_id', tenant.id)
+      .eq('active', true)
+      .single();
+
+    const agentPhone = agentData?.phone || null;
+    const agentName = agentData?.agent_name || 'Our Agent';
 
     const cleanLeadPhone = lead?.phone
       ? lead.phone.replace('whatsapp:', '').trim()
@@ -323,14 +293,14 @@ router.post('/', async (req, res) => {
       lead_size: lead?.size || null,
       lead_name: lead?.name || null,
       lead_whatsapp: lead?.phone || null,
-      assigned_agent_name: lead?.assigned_agent_name || null,
-      assigned_agent_phone: lead?.assigned_agent_phone || null,
       lead_location_options: lead?.location_options || null,
       last_viewed_property: lead?.last_viewed_property || null,
       awaiting_followup_response: lead?.awaiting_followup_response || false,
       lead_is_offplan: lead?.is_offplan ?? null,
       lead_completion_range: lead?.completion_range || null,
       last_completion_options: lead?.last_search_results || null,
+      agent_name: agentName,
+      agent_phone: agentPhone,
       tenant_id: tenant.id,
       tenant_company_name: tenant.company_name,
       tenant_bot_name: tenant.bot_name,
@@ -342,73 +312,22 @@ router.post('/', async (req, res) => {
     const result = await handleMessage(input);
     console.log('Action:', result.action);
 
-    // -----------------------------------------------
-    // ACTION: create — new lead
-    // -----------------------------------------------
     if (result.action === 'create') {
-
-  // STEP 1: get next agent (ONLY ONCE)
-  const selectedAgent = await getNextAgentRoundRobin(tenant.id);
-
-  // STEP 2: create lead + assign agent
-  const { data: newLead } = await supabase
-    .from('leads')
-    .insert({
-      phone: from,
-      tenant_id: tenant.id,
-      status: result.updateFields?.Status || 'New',
-      conversation_stage: result.updateFields?.['Conversation Stage'] || 'asked_buy_or_rent',
-
-      // 👇 ADD THIS (IMPORTANT)
-      assigned_agent_id: selectedAgent?.id || null,
-      assigned_agent_name: selectedAgent?.agent_name || null,
-      assigned_agent_phone: selectedAgent?.phone || null
-    })
-    .select()
-    .single();
-
-  // STEP 3: send message to user
-  await sendMessage(tenantWhatsApp, from, result.replyMessage);
-
-  return;
-}
-
- // -----------------------------------------------
-// ACTION: update — update lead fields
-// -----------------------------------------------
-if (result.action === 'update' && lead) {
-
-  // ============================================
-  // ENSURE LEAD HAS ASSIGNED AGENT
-  // ============================================
-  let assignedAgent = {
-    phone: lead.assigned_agent_phone,
-    agent_name: lead.assigned_agent_name
-  };
-
-  if (!lead.assigned_agent_phone) {
-    console.log('No assigned agent found for this lead. Assigning now...');
-
-    const selectedAgent = await getNextAgentRoundRobin(tenant.id);
-
-    if (selectedAgent) {
       await supabase
         .from('leads')
-        .update({
-          assigned_agent_id: selectedAgent.id,
-          assigned_agent_name: selectedAgent.agent_name,
-          assigned_agent_phone: selectedAgent.phone
-        })
-        .eq('id', lead.id);
+        .insert({
+          phone: from,
+          tenant_id: tenant.id,
+          status: result.updateFields?.Status || 'New',
+          conversation_stage: result.updateFields?.['Conversation Stage'] || 'asked_buy_or_rent'
+        });
 
-      assignedAgent = {
-        phone: selectedAgent.phone,
-        agent_name: selectedAgent.agent_name
-      };
-
-      console.log('Agent assigned during update:', assignedAgent);
+      await sendMessage(tenantWhatsApp, from, result.replyMessage);
+      return;
     }
-  }
+
+ 
+  if (result.action === 'update' && lead) {
 
   const updateData = {};
   if (result.updateFields?.['Conversation Stage']) updateData.conversation_stage = result.updateFields['Conversation Stage'];
@@ -538,7 +457,7 @@ if (result.action === 'update' && lead) {
 
           console.log(`Property ${i + 1} sent successfully`);
 
-          if (i < properties.length - 1) await delay(3000);
+          if (i < properties.length - 1) await delay(4000);
 
         } catch (propError) {
           console.error(`Error sending property ${i + 1}:`, propError.message);
@@ -549,7 +468,7 @@ if (result.action === 'update' && lead) {
       // Summary message AFTER all properties are sent
       console.log('All properties sent successfully');
       // Wait longer to ensure all messages including images have been delivered
-      await delay(properties.length * 1500);
+      await delay(properties.length * 2000);
       await sendMessage(
         tenantWhatsApp,
         from,
@@ -566,15 +485,15 @@ if (result.action === 'update' && lead) {
         from,
         `Sorry, we could not find any properties matching your criteria at the moment.\n\n` +
         `Our agent will contact you shortly to assist you personally.\n\n` +
-        `Agent: ${assignedAgent.agent_name}\n` +
-        `Phone: ${assignedAgent.phone || 'N/A'}\n\n` +
+        `Agent: ${agentName}\n` +
+        `Phone: ${agentPhone || 'N/A'}\n\n` +
         `You can also reply HI to start a new search.`
       );
 
-      if (assignedAgent.phone) {
+      if (agentPhone) {
         await sendTemplateToAgent(
           tenantWhatsApp,
-          assignedAgent.phone,
+          agentPhone,
           TEMPLATES.NO_PROPERTY_FOUND,
           {
             "1": lead.name || 'Unknown',
@@ -961,20 +880,7 @@ if (result.action === 'create_booking' && lead) {
       .eq('id', lead.id);
 
     await sendMessage(tenantWhatsApp, from, bookingData.message);
-
-    // 🔥 ALWAYS GET FRESH AGENT FROM DB
-    const { data: assignedLead } = await supabase
-      .from('leads')
-      .select('assigned_agent_phone, assigned_agent_name')
-      .eq('id', lead.id)
-      .single();
-
-    const agentPhone = assignedLead?.assigned_agent_phone;
-    const agentName = assignedLead?.assigned_agent_name || 'Our Agent';
-
-    console.log("Assigned agent (booking):", assignedLead);
-
-    await sendTemplateToAgent(
+await sendTemplateToAgent(
       tenantWhatsApp,
       agentPhone,
       TEMPLATES.BOOKING_CONFIRMED,
@@ -1023,17 +929,7 @@ if (result.action === 'create_booking' && lead) {
     await sendMessage(tenantWhatsApp, from, newSlotsData.message);
 
   } else {
-    // 🔥 GET AGENT AGAIN FOR FALLBACK
-    const { data: assignedLead } = await supabase
-      .from('leads')
-      .select('assigned_agent_phone, assigned_agent_name')
-      .eq('id', lead.id)
-      .single();
-
-    const agentPhone = assignedLead?.assigned_agent_phone;
-    const agentName = assignedLead?.assigned_agent_name || 'Our Agent';
-
-    await sendMessage(
+   await sendMessage(
       tenantWhatsApp,
       from,
       `Sorry, something went wrong with your booking.\n\n` +
@@ -1079,15 +975,6 @@ if (result.action === 'cancel_booking' && lead) {
     `Your viewing has been cancelled.\n\nReply HI to search for another property.`
   );
 
-  // 🔥 GET FRESH AGENT
-  const { data: assignedLead } = await supabase
-    .from('leads')
-    .select('assigned_agent_phone, assigned_agent_name')
-    .eq('id', lead.id)
-    .single();
-
-  const agentPhone = assignedLead?.assigned_agent_phone;
-
   await sendTemplateToAgent(
     tenantWhatsApp,
     agentPhone,
@@ -1115,16 +1002,7 @@ if (result.action === 'followup_interested' && lead) {
 
   await sendMessage(tenantWhatsApp, from, result.replyMessage);
 
-  // 🔥 GET FRESH AGENT
-  const { data: assignedLead } = await supabase
-    .from('leads')
-    .select('assigned_agent_phone, assigned_agent_name')
-    .eq('id', lead.id)
-    .single();
-
-  const agentPhone = assignedLead?.assigned_agent_phone;
-
-  await sendTemplateToAgent(
+ await sendTemplateToAgent(
     tenantWhatsApp,
     agentPhone,
     TEMPLATES.HOT_LEAD,

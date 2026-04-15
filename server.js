@@ -894,7 +894,8 @@ app.post('/api/create-booking', async (req, res) => {
     const calendarHasConflict = calendarConflicts.data.items &&
       calendarConflicts.data.items.length > 0;
 
-    const { data: conflictingBookings, error: conflictError } = await supabase
+  // Check conflict for this specific property
+    const { data: propertyConflicts, error: conflictError } = await supabase
       .from('bookings')
       .select('id')
       .eq('property_id', propertyId)
@@ -905,58 +906,61 @@ app.post('/api/create-booking', async (req, res) => {
 
     if (conflictError) throw conflictError;
 
-    const supabaseHasConflict = conflictingBookings.length > 0;
+    // Also check if the agent already has a booking at this time
+    // even for a different property — agent cannot be in two places at once
+    let agentHasConflict = false;
+    if (agentName) {
+      const { data: agentConflicts, error: agentConflictError } = await supabase
+        .from('bookings')
+        .select('id')
+        .eq('tenant_id', tenantId)
+        .eq('agent_name', agentName)
+        .neq('status', 'Cancelled')
+        .lt('start_datetime', slotEnd.toISOString())
+        .gt('end_datetime', slotStart.toISOString())
+        .limit(1);
+
+      if (!agentConflictError && agentConflicts.length > 0) {
+        agentHasConflict = true;
+        console.log('Agent already has a booking at this time:', agentName);
+      }
+    }
+
+    const supabaseHasConflict = propertyConflicts.length > 0 || agentHasConflict;
 
     console.log('Calendar conflict:', calendarHasConflict);
     console.log('Supabase conflict:', supabaseHasConflict);
 
     if (calendarHasConflict || supabaseHasConflict) {
       console.log('Slot is taken');
-      return res.json({
+     return res.json({
         success: false,
         slotTaken: true,
-        message: "Sorry, that time slot was just taken by another client.\n\nPlease select another time or reply HI to search again."
+        message: "Sorry, that time slot is no longer available.\n\nPlease select another time from the list."
       });
     }
 
     console.log('Slot is free, proceeding...');
 
-    // ============================================
-// GET ASSIGNED AGENT (ROUND ROBIN)
 // ============================================
-const { data: leadData, error: leadFetchError } = await supabase
-  .from('leads')
-  .select('assigned_agent_id')
-  .eq('id', leadId)
-  .single();
-
-if (leadFetchError) {
-  console.error('Failed to fetch lead:', leadFetchError);
-  throw leadFetchError;
-}
-
+// GET AGENT FROM AGENTS TABLE
+// ============================================
 let agentName = null;
 let agentPhone = null;
-let agentEmail = null;
 
-if (leadData?.assigned_agent_id) {
-  const { data: assignedAgent, error: agentError } = await supabase
-    .from('agents')
-    .select('agent_name, phone, email')
-    .eq('id', leadData.assigned_agent_id)
-    .single();
+const { data: agentData, error: agentFetchError } = await supabase
+  .from('agents')
+  .select('agent_name, phone')
+  .eq('tenant_id', tenantId)
+  .eq('active', true)
+  .single();
 
-  if (agentError) {
-    console.error('Failed to fetch assigned agent:', agentError);
-  }
-
-  agentName = assignedAgent?.agent_name || null;
-  agentPhone = assignedAgent?.phone || null;
-  agentEmail = assignedAgent?.email || null;
-
-  console.log('✅ Using ROUND ROBIN agent:', agentName, agentEmail);
+if (agentFetchError) {
+  console.error('Failed to fetch agent:', agentFetchError);
 } else {
-  console.log('⚠️ No assigned agent found on lead');
+  agentName = agentData?.agent_name || null;
+  agentPhone = agentData?.phone || null;
+  console.log('Agent found:', agentName, agentPhone);
 }
 
     // 4. GET PROPERTY AND AGENT DETAILS
@@ -986,40 +990,8 @@ if (leadData?.assigned_agent_id) {
 // ============================================
 console.log('Creating calendar event...');
 
-// ✅ Enhance agent email if missing or unreliable
-let agentDisplayName = agentName;
-
-try {
-  if (!agentEmail && agentName) {
-    const { data: agentRecord, error: agentError } = await supabase
-      .from('agents')
-      .select('email, agent_name')
-      .eq('tenant_id', tenantId)
-      .ilike('agent_name', agentName)
-      .single();
-
-    if (agentError) {
-      console.error('Agent fetch error:', agentError.message);
-    }
-
-    if (agentRecord?.email) {
-      agentEmail = agentRecord.email;
-      agentDisplayName = agentRecord.agent_name;
-      console.log('✅ Agent email fetched from agents table:', agentEmail);
-    } else {
-      console.log('⚠️ No agent email found for:', agentName);
-    }
-  } else {
-    console.log('✅ Using agent email from property relation:', agentEmail);
-  }
-} catch (err) {
-  console.error('Failed to fetch agent email:', err.message);
-}
-
-// ✅ Create event
 const event = {
   summary: `${companyName} - Property Viewing`,
-
   description:
     `Property: ${propertyName}\n` +
     `Client: ${leadName}\n` +
@@ -1027,25 +999,18 @@ const event = {
     `Location: ${propertyAddress}\n\n` +
     `Agent: ${agentName || 'N/A'}\n` +
     `Agent Phone: ${agentPhone || 'N/A'}`,
-
   location: propertyAddress,
-
   start: {
     dateTime: slotStart.toISOString(),
     timeZone: timezone
   },
-
   end: {
     dateTime: slotEnd.toISOString(),
     timeZone: timezone
   },
-
-  sendUpdates: 'all',
-
   reminders: {
     useDefault: false,
     overrides: [
-      { method: 'email', minutes: 24 * 60 },
       { method: 'popup', minutes: 60 }
     ]
   }
@@ -1169,7 +1134,6 @@ try {
       eventId: calendarEvent.data.id,
       message: confirmMessage,
       agentMessage: agentMessage,
-      agentEmail: agentEmail,
       agentPhone: agentPhone,
       agentName: agentName,
       slotDetails: {

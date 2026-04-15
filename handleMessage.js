@@ -189,9 +189,6 @@ Reply with the name or number (e.g., Buy or 1).`;
       return response;
     }
 
-    // ======================================
-    // GREETING (RESTART FOR EXISTING USERS)
-    // ======================================
     if (message.match(/^(hi|hello|hey|start|helo|restart)$/)) {
       response.action = "update";
       response.updateFields = {
@@ -199,17 +196,11 @@ Reply with the name or number (e.g., Buy or 1).`;
       };
 
       const options = formatOptions(tenantTypes);
+      const userName = input.lead_name;
 
-      response.replyMessage = 
-`Hi! Welcome back to ${companyName} 👋
-
-I'm ${botName}, your property assistant.
-
-What are you looking for?
-
-${options}
-
-Reply with the name or number (e.g., Rent or 2).`;
+      response.replyMessage = userName
+        ? `Welcome back, *${userName}*! 👋\n\nI'm ${botName} from *${companyName}*.\n\nWhat are you looking for today?\n\n${options}\n\nReply with the name or number.`
+        : `Hi! Welcome to *${companyName}* 👋\n\nI'm ${botName}, your property assistant.\n\nWhat are you looking for?\n\n${options}\n\nReply with the name or number.`;
 
       return response;
     }
@@ -302,17 +293,25 @@ Reply with the name or number.`;
         return response;
       }
 
-      response.action = "update";
-      response.updateFields = {
-        "Interest": selectedType,
-        "Conversation Stage": "asked_name"
-      };
+      const existingName = input.lead_name;
 
-      response.replyMessage = `Great choice! 👍
-
-What's your name?
-
-(Just type your name, e.g., Peter or Mary Jane)`;
+      if (existingName) {
+        // Skip name — go straight to locations
+        response.action = "fetch_locations";
+        response.updateFields = {
+          "Interest": selectedType,
+          "Conversation Stage": "fetching_locations"
+        };
+        response.interest = selectedType;
+        response.replyMessage = `Great choice! Let me check available areas for you... 🔍`;
+      } else {
+        response.action = "update";
+        response.updateFields = {
+          "Interest": selectedType,
+          "Conversation Stage": "asked_name"
+        };
+        response.replyMessage = `Great choice! 👍\n\nWhat's your name?\n\n(Just type your name, e.g., Peter or Mary Jane)`;
+      }
       return response;
     }
 
@@ -450,15 +449,17 @@ Just the number is fine!`;
         });
 
         if (!readyExists) {
+          const agName = input.agent_name || 'Our Agent';
+          const agPhone = input.agent_phone || 'N/A';
           response.action = "update";
           response.updateFields = { "Conversation Stage": "asked_offplan" };
           response.replyMessage =
-            `No ready properties available right now.\n\n` +
-            `We currently have off-plan options.\n\n` +
-            `Reply *2* to see off-plan properties\n` +
-            `or contact our agent:\n` +
-            `${input.assigned_agent_name || agentName || 'Our Agent'}\n` +
-            `${input.assigned_agent_phone || agentPhone || 'N/A'}`;
+            `We currently don't have ready properties available.\n\n` +
+            `We do have off-plan options though!\n\n` +
+            `Reply *2* to explore off-plan properties.\n\n` +
+            `Or contact our agent:\n` +
+            `👤 ${agName}\n` +
+            `📞 ${agPhone}`;
           return response;
         }
 
@@ -496,15 +497,17 @@ Just the number is fine!`;
         });
 
         if (!offplanExists) {
+          const agName = input.agent_name || 'Our Agent';
+          const agPhone = input.agent_phone || 'N/A';
           response.action = "update";
           response.updateFields = { "Conversation Stage": "asked_offplan" };
           response.replyMessage =
-            `No off-plan properties available right now.\n\n` +
-            `We currently have ready properties.\n\n` +
-            `Reply *1* to see ready properties\n` +
-            `or contact our agent:\n` +
-            `${input.assigned_agent_name || agentName || 'Our Agent'}\n` +
-            `${input.assigned_agent_phone || agentPhone || 'N/A'}`;
+            `We currently don't have off-plan properties available.\n\n` +
+            `We do have ready properties you can move into now!\n\n` +
+            `Reply *1* to explore ready properties.\n\n` +
+            `Or contact our agent:\n` +
+            `👤 ${agName}\n` +
+            `📞 ${agPhone}`;
           return response;
         }
 
@@ -606,14 +609,33 @@ if (stage === "asked_location") {
     console.log("Location selection index:", index);
     console.log("Available locations:", locationOptions);
 
-    if (index >= 0 && index < locationOptions.length) {
+   if (index >= 0 && index < locationOptions.length) {
       location = locationOptions[index];
     } else {
       response.action = "invalid";
+      const optionsList = locationOptions.map((loc, i) => `${i + 1}️⃣ ${loc}`).join('\n');
       response.replyMessage =
-        `Please choose a valid number from the list (1 - ${locationOptions.length}).`;
+        `That number is not in the list. Please choose between 1 and ${locationOptions.length}.\n\n` +
+        `${optionsList}\n\n` +
+        `Reply with a number (e.g. 1, 2, 3)`;
       return response;
     }
+  }
+
+  // ======================================
+  // STEP 2B: MULTIPLE NUMBERS DETECTED
+  // ======================================
+  // User typed something like "1, 3 & 4" or "1 and 3"
+  const multipleNumbers = message.match(/\d+/g);
+  if (multipleNumbers && multipleNumbers.length > 1 && locationOptions.length > 0) {
+    response.action = "invalid";
+    const optionsList = locationOptions.map((loc, i) => `${i + 1}️⃣ ${loc}`).join('\n');
+    response.replyMessage =
+      `Please choose just *one* area at a time. 😊\n\n` +
+      `Which area would you like to start with?\n\n` +
+      `${optionsList}\n\n` +
+      `Reply with one number (e.g. 1, 2, 3)`;
+    return response;
   }
 
   // ======================================
@@ -690,12 +712,11 @@ if (stage === "asked_size") {
   }
 
   // Validation
-  if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedrooms > 20) {
+if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedrooms > 20) {
     response.action = "invalid";
     response.replyMessage =
-      `Please enter the number of bedrooms you need.\n\n` +
-      `Examples: Studio, 1, 2, 3, 4\n\n` +
-      `Just type Studio or the number!`;
+      `That doesn't look right. Please choose from the bedroom options shown above.\n\n` +
+      `Just type the number (e.g. 1, 2, 3) or *Studio*.`;
     return response;
   }
 
@@ -863,9 +884,10 @@ Example: Property1 or just 1`;
 
       if (!slotNumber) {
         response.action = "invalid";
-        response.replyMessage = `Please reply with the slot number.
-
-Example: 3 or Slot 3`;
+        response.replyMessage =
+          `Please reply with just the slot number.\n\n` +
+          `Example: *1*, *2*, *3*\n\n` +
+          `Check the list above and pick a number.`;
         return response;
       }
 
@@ -899,55 +921,76 @@ Example: 3 or Slot 3`;
     // DEFAULT (Catch-all for unexpected input)
     // ======================================
     response.action = "invalid";
-    response.replyMessage = getHelpMessage(stage);
+    response.replyMessage = getHelpMessage(stage, tenantTypes);
     return response;
 
+    // Helper function INSIDE handleMessage
     function getHelpMessage(currentStage) {
       switch(currentStage) {
-        case "asked_buy_or_rent": 
-          return `Please choose from the options:
-
-1️⃣ Buy
-2️⃣ Rent
-3️⃣ Land
-
-Reply with the name or number.`;
-        
-        case "asked_name": 
-          return `Please enter your name.
-
-Just your first name or full name (e.g., John or Mary Jane).`;
-        
-        case "asked_budget": 
-          return `Please enter your budget.
-
-Examples:
-• 5000000
-• 5M (5 million)
-• 500K (500 thousand)`;
-        
-        case "asked_location": 
-          return "Please choose a location from the list above.";
-        
-        case "asked_size": 
-          return "Please enter the number of bedrooms (e.g., 1, 2, 3).";
-        
-        case "asked_land_size": 
-          return `Please enter the plot size.
-
-Examples: 50x100, 1/4 Acre, 1/8`;
-        
-        case "awaiting_time_slot": 
-          return "Please reply with the slot number (e.g., 1, 2, 3).";
-        
+        case "asked_buy_or_rent":
+          return (
+            `Please choose what you are looking for:\n\n` +
+            `${formatOptions(tenantTypes)}\n\n` +
+            `Reply with the name or number.`
+          );
+        case "asked_name":
+          return (
+            `Please enter your name.\n\n` +
+            `Just your first name or full name.\n` +
+            `Example: *John* or *Mary Jane*`
+          );
+        case "asked_budget":
+          return (
+            `Please enter your budget.\n\n` +
+            `Examples:\n` +
+            `• *5M* (5 million)\n` +
+            `• *10M* (10 million)\n` +
+            `• *KES 5,000,000*\n\n` +
+            `Just type the amount.`
+          );
+        case "asked_location":
+          return (
+            `Please choose a location from the list above.\n\n` +
+            `Reply with the number (e.g. *1*, *2*, *3*).`
+          );
+        case "asked_offplan":
+          return (
+            `Please choose one of the options:\n\n` +
+            `1️⃣ Ready (move in immediately)\n` +
+            `2️⃣ Off-Plan (under construction)\n\n` +
+            `Reply with *1* or *2*.`
+          );
+        case "asked_completion":
+          return (
+            `Please choose a completion date from the options above.\n\n` +
+            `Reply with the number (e.g. *1*, *2*) or type the date.`
+          );
+        case "asked_size":
+          return (
+            `Please choose the number of bedrooms from the options above.\n\n` +
+            `Reply with a number (e.g. *1*, *2*, *3*) or type *Studio*.`
+          );
+        case "asked_land_size":
+          return (
+            `Please choose a plot size from the options above.\n\n` +
+            `Just type the size (e.g. *50x100*, *1/4 Acre*).`
+          );
+        case "awaiting_time_slot":
+          return (
+            `Please choose a slot from the list above.\n\n` +
+            `Reply with the slot number (e.g. *1*, *2*, *3*).`
+          );
         case "booking_confirmed":
-          return "Your viewing is confirmed! Reply CANCEL to cancel, or HI to start over.";
-        
-        default: 
-          return "Hi! Send 'HI' to start finding your perfect property! 🏡";
+          return (
+            `Your viewing is confirmed! ✅\n\n` +
+            `Reply *CANCEL* to cancel your booking.`
+          );
+        default:
+          return (
+            `Please reply with one of the options shown above.`
+          );
       }
     }
-
   } catch (error) {
     console.error("Error in handleMessage:", error);
     return {
