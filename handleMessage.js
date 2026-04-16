@@ -206,11 +206,10 @@ Reply with the name or number (e.g., Buy or 1).`;
       return response;
     }
 
-    async function getBudgetRange(tenantId, interest, location, size) {
+    async function getBudgetRange(tenantId, interest, location, bedrooms) {
   try {
     const normalizedInterest = normalize(interest);
     const normalizedLocation = normalize(location);
-    const bedroomNumber = extractBedrooms(size);
 
     let query = supabase
       .from('properties')
@@ -220,13 +219,10 @@ Reply with the name or number (e.g., Buy or 1).`;
       .ilike('type', normalizedInterest)
       .ilike('location', normalizedLocation);
 
-if (bedroomNumber !== null) {
-  if (bedroomNumber === 0) {
-    query = query.eq('bedrooms', 0);
-  } else {
-    query = query.eq('bedrooms', bedroomNumber);
-  }
-}
+    // ✅ ALWAYS filter bedrooms (including studio = 0)
+    if (bedrooms !== null && bedrooms !== undefined) {
+      query = query.eq('bedrooms', bedrooms);
+    }
 
     const { data, error } = await query;
 
@@ -234,7 +230,11 @@ if (bedroomNumber !== null) {
       return null;
     }
 
-    const prices = data.map(p => Number(p.price)).filter(Boolean);
+    const prices = data
+      .map(p => Number(p.price))
+      .filter(p => !isNaN(p));
+
+    if (prices.length === 0) return null;
 
     const min = Math.min(...prices);
     const max = Math.max(...prices);
@@ -270,8 +270,8 @@ const exists = await checkPropertyExists(input.tenant_id, {
 });
 
 if (!exists) {
-  const agentName = input.assigned_agent_name || "Our Agent";
-  const agentPhone = input.assigned_agent_phone || "N/A";
+  const agentName = input.agent_name || "Our Agent";
+  const agentPhone = input.agent_phone || "N/A";
 
   response.action = "update";
   response.updateFields = {
