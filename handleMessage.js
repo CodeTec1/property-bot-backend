@@ -16,6 +16,54 @@ function extractBedrooms(sizeStr) {
   return match ? parseInt(match[0]) : null;
 }
 
+// helper fuzzy matching function
+
+function levenshtein(a, b) {
+  const matrix = [];
+
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          matrix[i][j - 1] + 1,     // insertion
+          matrix[i - 1][j] + 1      // deletion
+        );
+      }
+    }
+  }
+
+  return matrix[b.length][a.length];
+}
+
+function smartMatch(input, options) {
+  input = input.toLowerCase().trim();
+
+  let bestMatch = null;
+  let bestScore = Infinity;
+
+  for (const option of options) {
+    const opt = option.toLowerCase();
+
+    const distance = levenshtein(input, opt);
+
+    if (distance < bestScore) {
+      bestScore = distance;
+      bestMatch = option;
+    }
+  }
+
+  return {
+    match: bestMatch,
+    confidence: bestScore
+  };
+}
+
 // ============================================
 // Helper: Check if properties exist
 // ============================================
@@ -262,7 +310,7 @@ Reply with the name or number (e.g., Buy or 1).`;
 
       const selectedType = typeMapping[message];
 
-      // ======================================
+// ======================================
 // CHECK IF TYPE EXISTS IN DB
 // ======================================
 const exists = await checkPropertyExists(input.tenant_id, {
@@ -643,24 +691,41 @@ if (stage === "asked_location") {
     return response;
   }
 
-  // ======================================
-  // STEP 3: TEXT INPUT (FALLBACK ONLY)
-  // ======================================
-  if (!location) {
-    let cleanedMessage = message;
+ // ======================================
+// STEP 3: TEXT INPUT → SMART MATCH
+// ======================================
+if (!location && locationOptions.length > 0) {
 
-    if (message.match(/in (.+)/i)) {
-      cleanedMessage = message.match(/in (.+)/i)[1];
-    } else if (message.match(/at (.+)/i)) {
-      cleanedMessage = message.match(/at (.+)/i)[1];
-    }
+  const { match, confidence } = smartMatch(message, locationOptions);
 
-    location = cleanedMessage
-      .trim()
-      .split(/\s+/)
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
+  // HIGH confidence → accept
+  if (confidence <= 1) {
+    location = match;
   }
+
+  // MEDIUM confidence → ask user
+  else if (confidence === 2) {
+    return {
+      action: "clarify_location",
+      tempMatch: match,
+      replyMessage: `Did you mean *${match}*? 📍\n\nReply YES or NO.`
+    };
+  }
+
+  // LOW confidence → reject
+  else {
+    const optionsList = locationOptions.map((loc, i) => `${i + 1}️⃣ ${loc}`).join('\n');
+
+    return {
+      action: "invalid",
+      replyMessage:
+        `I didn't quite understand that 🤔\n\n` +
+        `Please choose one of these areas:\n\n` +
+        `${optionsList}\n\n` +
+        `Reply with a number or type the name 😊`
+    };
+  }
+}
 
   // ======================================
   // STEP 4: FINAL VALIDATION
@@ -694,30 +759,53 @@ if (stage === "asked_location") {
 }
 
   // ======================================
-// STAGE 5: SIZE (HOUSES)
+// STAGE 5: SIZE (HOUSES) - SMART VERSION
 // ======================================
 if (stage === "asked_size") {
-  let bedroomsStr = message;
+
+  const options = ["studio", "1", "2", "3", "4"];
+
+  const { match, confidence } = smartMatch(message, options);
+
   let bedrooms = null;
 
-  // Check for studio first
-  const isStudio = message.match(/stud/i);
-
-  if (isStudio) {
-    bedrooms = 0;
-  } else {
-    if (message.match(/(\d+)\s*bed/i)) {
-      bedroomsStr = message.match(/(\d+)\s*bed/i)[1];
-    } else if (message.match(/i (want|need) (\d+)/i)) {
-      bedroomsStr = message.match(/i (want|need) (\d+)/i)[2];
-    } else if (message.match(/^\d+$/)) {
-      bedroomsStr = message;
-    }
-    bedrooms = parseInt(bedroomsStr);
+  // ======================================
+  // HIGH CONFIDENCE → ACCEPT
+  // ======================================
+  if (confidence <= 1) {
+    if (match === "studio") bedrooms = 0;
+    else bedrooms = parseInt(match);
   }
 
-  // Validation
-if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedrooms > 20) {
+  // ======================================
+  // MEDIUM CONFIDENCE → ASK USER
+  // ======================================
+  else if (confidence === 2) {
+    return {
+      action: "clarify_size",
+      tempMatch: match,
+      replyMessage: `Did you mean *${match === "studio" ? "Studio" : match + " Bedroom"}*? 😊\n\nReply YES or NO.`
+    };
+  }
+
+  // ======================================
+  // LOW CONFIDENCE → REJECT
+  // ======================================
+  else {
+    return {
+      action: "invalid",
+      replyMessage:
+        `I didn't quite understand that 🤔\n\n` +
+        `Please choose one of the options:\n\n` +
+        `• Studio\n• 1 Bedroom\n• 2 Bedrooms\n• 3 Bedrooms\n\n` +
+        `You can type or choose a number 😊`
+    };
+  }
+
+  // ======================================
+  // VALIDATION SAFETY (EXTRA PROTECTION)
+  // ======================================
+  if (bedrooms === null || isNaN(bedrooms) || bedrooms < 0 || bedrooms > 20) {
     response.action = "invalid";
     response.replyMessage =
       `That doesn't look right. Please choose from the bedroom options shown above.\n\n` +
@@ -726,14 +814,16 @@ if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedro
   }
 
   // ======================================
-  // NEW: CLEAN VALUES
+  // CLEAN VALUES
   // ======================================
   const finalInterest = lead.Interest || input.lead_interest || "Not specified";
   const finalLocation = lead.Location || input.lead_location || "Not specified";
-  const displaySize = bedrooms === 0 ? 'Studio' : `${bedrooms} Bedroom${bedrooms > 1 ? 's' : ''}`;
+  const displaySize = bedrooms === 0
+    ? 'Studio'
+    : `${bedrooms} Bedroom${bedrooms > 1 ? 's' : ''}`;
 
   // ======================================
-  // STEP 1: UPDATE LEAD
+  // UPDATE LEAD
   // ======================================
   response.action = "update";
   response.updateFields = {
@@ -743,27 +833,24 @@ if (bedrooms === null || (isNaN(bedrooms) && !isStudio) || bedrooms < 0 || bedro
 
   response.bedrooms = bedrooms;
 
- // ======================================
-// STEP 2: GET BUDGET RANGE FROM DB
-// ======================================
-let budgetRange = null;
+  // ======================================
+  // GET BUDGET RANGE
+  // ======================================
+  let budgetRange = null;
 
-// ✅ FIX: Ensure Studio is handled correctly
-const isStudioFlow = bedrooms === 0;
-
-try {
-  budgetRange = await getBudgetRange(
-    input.tenant_id,
-    finalInterest,
-    finalLocation,
-    bedrooms // 
-  );
-} catch (err) {
-  console.error("Error fetching budget range:", err);
-}
+  try {
+    budgetRange = await getBudgetRange(
+      input.tenant_id,
+      finalInterest,
+      finalLocation,
+      bedrooms
+    );
+  } catch (err) {
+    console.error("Error fetching budget range:", err);
+  }
 
   // ======================================
-  // STEP 3: BUILD RESPONSE MESSAGE
+  // RESPONSE MESSAGE
   // ======================================
   if (budgetRange && budgetRange.min && budgetRange.max) {
     response.replyMessage =
@@ -771,10 +858,9 @@ try {
       `${finalLocation} • ${displaySize} • ${finalInterest}\n\n` +
       `Available price range:\n` +
       `💰 KES ${budgetRange.min.toLocaleString()} – KES ${budgetRange.max.toLocaleString()}\n\n` +
-      `What is your budget within this range? \n\n` +
-      `Just type your price.Eg \n• 50000\n• 10M\n• 500k`;
+      `What is your budget within this range?\n\n` +
+      `Just type your price.\nEg:\n• 50000\n• 10M\n• 500k`;
   } else {
-    // Fallback (VERY IMPORTANT)
     response.replyMessage =
       `Perfect! What is your budget in Ksh?\n\n` +
       `Examples:\n• 50000\n• 10M\n• 500k\n\n` +
@@ -784,24 +870,22 @@ try {
   return response;
 }
 
-    // ======================================
-    // STAGE 5B: LAND SIZE SELECTION
-    // ======================================
-    if (stage === "asked_land_size") {
-      // Clean plot size input
-      let plotSize = originalMessage.trim(); // Keep original case for plot sizes like "1/4 Acre"
+// ======================================
+// STAGE 5B: LAND SIZE SELECTION (UNCHANGED)
+// ======================================
+if (stage === "asked_land_size") {
 
-      // Extract from various formats
-      if (message.match(/(\d+x\d+|\d+\/\d+|\d+\s*acre)/i)) {
-        // Already in good format
-      } else if (message.match(/i (want|need) (.+)/i)) {
-        plotSize = message.match(/i (want|need) (.+)/i)[2];
-      }
+  let plotSize = originalMessage.trim();
 
-      // Basic validation
-      if (plotSize.length < 2) {
-        response.action = "invalid";
-        response.replyMessage = `Please enter the plot size you're interested in.
+  if (message.match(/(\d+x\d+|\d+\/\d+|\d+\s*acre)/i)) {
+    // valid
+  } else if (message.match(/i (want|need) (.+)/i)) {
+    plotSize = message.match(/i (want|need) (.+)/i)[2];
+  }
+
+  if (plotSize.length < 2) {
+    response.action = "invalid";
+    response.replyMessage = `Please enter the plot size you're interested in.
 
 Examples:
 • 50x100
@@ -809,26 +893,26 @@ Examples:
 • 1/8
 
 Choose from the options above!`;
-        return response;
-      }
+    return response;
+  }
 
-      const finalInterest = lead.Interest || input.lead_interest || "Land";
-      const finalBudget = lead.Budget || input.lead_budget || "Not specified";
-      const finalLocation = lead.Location || input.lead_location || "Not specified";
+  const finalInterest = lead.Interest || input.lead_interest || "Land";
+  const finalBudget = lead.Budget || input.lead_budget || "Not specified";
+  const finalLocation = lead.Location || input.lead_location || "Not specified";
 
-      response.action = "update";
-      response.updateFields = {
-        "Size": plotSize,
-        "Conversation Stage": "completed",
-        "Status": "Contacted"
-      };
+  response.action = "update";
+  response.updateFields = {
+    "Size": plotSize,
+    "Conversation Stage": "completed",
+    "Status": "Contacted"
+  };
 
-      response.interest = finalInterest;
-      response.location = finalLocation;
-      response.plotSize = plotSize;
-      response.searchProperties = true;
+  response.interest = finalInterest;
+  response.location = finalLocation;
+  response.plotSize = plotSize;
+  response.searchProperties = true;
 
-      response.replyMessage = `✅ Got it! Let me find the best land matches for you...
+  response.replyMessage = `✅ Got it! Let me find the best land matches for you...
 
 📋 Your preferences:
 • Interest: ${finalInterest}
@@ -838,8 +922,8 @@ Choose from the options above!`;
 
 Searching properties... 🔍`;
 
-      return response;
-    }
+  return response;
+}
 
     // ======================================
     // STAGE 7: BOOKING REQUEST
