@@ -5,7 +5,10 @@ import Layout from '../components/Layout'
 const STATUS_CONFIG = {
   'New': { color: '#6b7280', bg: '#6b728018' },
   'Contacted': { color: '#0088ff', bg: '#0088ff18' },
+  'Booked': { color: '#8b5cf6', bg: '#8b5cf618' },
   'Hot Lead': { color: '#f59e0b', bg: '#f59e0b18' },
+  'Offer Made': { color: '#f97316', bg: '#f9731618' },
+  'Deal Closed': { color: '#10b981', bg: '#10b98118' },
   'Not Interested': { color: '#ef4444', bg: '#ef444418' },
   'Cancelled': { color: '#ef4444', bg: '#ef444418' },
   'Completed': { color: '#10b981', bg: '#10b98118' }
@@ -79,13 +82,14 @@ export default function Leads({ user }) {
     }
   }
 
-  const statuses = ['All', 'New', 'Contacted', 'Hot Lead', 'Not Interested', 'Cancelled']
+  const statuses = ['All', 'New', 'Contacted', 'Booked', 'Hot Lead', 'Offer Made', 'Deal Closed', 'Not Interested', 'Cancelled']
 
   const stats = {
     total: leads.length,
     hot: leads.filter(l => l.status === 'Hot Lead').length,
     new: leads.filter(l => l.status === 'New').length,
-    contacted: leads.filter(l => l.status === 'Contacted').length
+    booked: leads.filter(l => l.status === 'Booked').length,
+    closed: leads.filter(l => l.status === 'Deal Closed').length
   }
 
   return (
@@ -119,15 +123,16 @@ export default function Leads({ user }) {
       {/* Mini stats */}
       <div className="fade-up fade-up-1" style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
+        gridTemplateColumns: 'repeat(5, 1fr)',
         gap: '12px',
         marginBottom: '24px'
       }}>
         {[
           { label: 'Total', value: stats.total, color: '#00E5FF' },
           { label: 'New', value: stats.new, color: '#6b7280' },
-          { label: 'Contacted', value: stats.contacted, color: '#0088ff' },
-          { label: 'Hot Leads', value: stats.hot, color: '#f59e0b' }
+          { label: 'Booked', value: stats.booked, color: '#8b5cf6' },
+          { label: 'Hot Leads', value: stats.hot, color: '#f59e0b' },
+          { label: 'Deals Closed', value: stats.closed, color: '#10b981' }
         ].map(s => (
           <div key={s.label} style={{
             background: 'var(--bg-card)',
@@ -521,7 +526,39 @@ export default function Leads({ user }) {
               marginBottom: '20px'
             }}>
               {[
-                { label: 'Status', value: <StatusBadge status={selectedLead.status} /> },
+                { label: 'Status', value: (
+                  <select
+                    value={selectedLead.status || 'New'}
+                    onChange={async (e) => {
+                      const newStatus = e.target.value
+                      const { error } = await supabase
+                        .from('leads')
+                        .update({ status: newStatus })
+                        .eq('id', selectedLead.id)
+                      if (!error) {
+                        setSelectedLead({ ...selectedLead, status: newStatus })
+                        setLeads(leads.map(l =>
+                          l.id === selectedLead.id ? { ...l, status: newStatus } : l
+                        ))
+                      }
+                    }}
+                    style={{
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--accent-border)',
+                      borderRadius: '6px',
+                      color: '#ffffff',
+                      fontSize: '12px',
+                      padding: '4px 8px',
+                      cursor: 'pointer',
+                      outline: 'none',
+                      width: '100%'
+                    }}
+                  >
+                    {['New','Contacted','Booked','Hot Lead','Offer Made','Deal Closed','Not Interested','Cancelled'].map(s => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                ) },
                 { label: 'Interest', value: selectedLead.interest || '—' },
                 { label: 'Budget', value: selectedLead.budget ? `KES ${Number(selectedLead.budget).toLocaleString()}` : '—' },
                 { label: 'Location', value: selectedLead.location || '—' },
@@ -579,6 +616,71 @@ export default function Leads({ user }) {
               }}>
                 {selectedLead.conversation_stage?.replace(/_/g, ' ') || '—'}
               </div>
+              {/* Agent Notes */}
+            <div style={{ marginTop: '12px' }}>
+              <div style={{
+                fontSize: '11px',
+                color: 'var(--text-muted)',
+                marginBottom: '6px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+                fontWeight: '600'
+              }}>
+                Agent Notes
+              </div>
+              <textarea
+                key={selectedLead.id}
+                defaultValue={selectedLead.notes || ''}
+                placeholder="Add notes about this lead after viewing..."
+                rows={3}
+                id="lead-notes-textarea"
+                style={{
+                  width: '100%',
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: '#ffffff',
+                  fontSize: '13px',
+                  padding: '10px 14px',
+                  resize: 'none',
+                  outline: 'none',
+                  fontFamily: 'inherit',
+                  boxSizing: 'border-box'
+                }}
+                onFocus={e => e.target.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.target.style.borderColor = 'var(--border)'}
+              />
+              <button
+                onClick={async () => {
+                  const notes = document.getElementById('lead-notes-textarea').value
+                  const { error } = await supabase
+                    .from('leads')
+                    .update({ notes })
+                    .eq('id', selectedLead.id)
+                  if (!error) {
+                    setSelectedLead({ ...selectedLead, notes })
+                    setLeads(leads.map(l =>
+                      l.id === selectedLead.id ? { ...l, notes } : l
+                    ))
+                    alert('Notes saved!')
+                  }
+                }}
+                style={{
+                  marginTop: '8px',
+                  padding: '8px 20px',
+                  background: 'var(--accent)',
+                  color: '#0B0F1A',
+                  border: 'none',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  width: '100%'
+                }}
+              >
+                Save Notes
+              </button>
+            </div>
             </div>
           </div>
         </div>
