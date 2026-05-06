@@ -419,9 +419,11 @@ export default function Leads({ user }) {
                         color: 'var(--text-muted)',
                         whiteSpace: 'nowrap'
                       }}>
-                        {lead.created_at
-                          ? new Date(lead.created_at).toLocaleDateString('en-KE')
-                          : '—'}
+                        {lead.updated_at
+                          ? new Date(lead.updated_at).toLocaleDateString('en-KE')
+                          : lead.created_at
+                            ? new Date(lead.created_at).toLocaleDateString('en-KE')
+                            : '—'}
                       </span>
                     </td>
                   </tr>
@@ -558,13 +560,21 @@ export default function Leads({ user }) {
                       <option key={s} value={s}>{s}</option>
                     ))}
                   </select>
-                ) },
+                )},
                 { label: 'Interest', value: selectedLead.interest || '—' },
                 { label: 'Budget', value: selectedLead.budget ? `KES ${Number(selectedLead.budget).toLocaleString()}` : '—' },
                 { label: 'Location', value: selectedLead.location || '—' },
                 { label: 'Size', value: selectedLead.size || '—' },
+                { label: 'Purpose', value: selectedLead.purpose || '—' },
+                { label: 'Client Type', value: selectedLead.client_type || '—' },
+                { label: 'Payment Method', value: selectedLead.payment_method || '—' },
+                { label: 'Timeline', value: selectedLead.timeline || '—' },
+                { label: 'Decision Maker', value: selectedLead.decision_maker || '—' },
+                { label: 'Lead Source', value: selectedLead.lead_source || '—' },
+                { label: 'Last Active', value: selectedLead.updated_at ? new Date(selectedLead.updated_at).toLocaleDateString('en-KE') : '—' },
                 { label: 'Date Added', value: selectedLead.created_at ? new Date(selectedLead.created_at).toLocaleDateString('en-KE') : '—' }
               ].map(item => (
+          
                 <div key={item.label} style={{
                   background: 'var(--bg-primary)',
                   borderRadius: 'var(--radius-sm)',
