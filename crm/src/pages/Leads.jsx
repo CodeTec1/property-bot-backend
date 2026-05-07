@@ -460,6 +460,8 @@ export default function Leads({ user }) {
               padding: '32px',
               width: '100%',
               maxWidth: '480px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
               boxShadow: '0 32px 80px rgba(0,0,0,0.5), var(--shadow-glow)',
               animation: 'fadeUp 0.3s ease'
             }}
